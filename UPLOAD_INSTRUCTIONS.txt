@@ -1,0 +1,53 @@
+BINANCE INSIGHT STRATEGY V2 — FULL REPLACEMENT FILES
+
+These are complete replacement files, not patches. No GitHub files were changed by ChatGPT.
+
+Upload each file to the same path in your GitHub repository, replacing the existing file where one already exists.
+
+NEW FILES
+- trading/constants.py
+- trading/services/execution_guards.py
+
+REPLACE THESE FILES
+- trading/models.py
+- trading/views.py
+- trading/services/indicators.py
+- trading/services/scoring.py
+- trading/services/scanner.py
+- trading/services/paper.py
+- trading/services/backtest.py
+- trading/services/live_gate.py
+- trading/services/live_trading.py
+- trading/tests/test_core.py
+
+No database migration is required because no model fields were added or removed.
+
+IMPORTANT V2 BEHAVIOUR
+1. V2 automatically creates a new paper account named primary-v2, starting from configured paper_starting_cash (normally $10,000).
+2. Old V1 accounts/trades remain in the database but are excluded from V2 P/L and live-gate calculations.
+3. V2 signals are version-tagged, so V1 signals cannot trigger V2 trades.
+4. The same completed candle cannot be traded twice.
+5. A 60-minute re-entry cooldown applies after a V2 trade closes.
+6. A setup must CLOSE above the previous 20-candle high to count as a breakout.
+7. Breakouts require adequate volume, acceptable RSI, supportive trend, supportive BTC regime and acceptable spread.
+8. Extended breakouts are rejected instead of chased.
+9. Volume scoring is smoothed instead of frequently collapsing to 0/100.
+10. Paper entries use current Binance price and reject signals after excessive price drift.
+11. Paper stop/target detection uses 1-second Binance candles between worker checks.
+12. If stop and target are both touched in the same 1-second candle, the paper engine assumes stop first (conservative).
+13. Actual paper/live targets are recalculated from the achieved entry so the configured R multiple is preserved.
+14. Total exposure is checked AFTER including the proposed new position.
+15. Backtests use historical BTC regime data, matching live scanning logic.
+16. Backtest entry fees are no longer double-counted.
+17. Backtests use mark-to-market equity for more realistic drawdown measurement.
+18. Scanner defaults to a curated liquid/core universe instead of admitting meme/newly speculative pairs solely because of volume.
+19. Live reconciliation still protects any already-open exchange positions, including older-version positions.
+20. Live trading remains governed by the paper live gate and environment safety switches.
+
+AFTER UPLOAD
+- Redeploy Render.
+- Keep BINANCE_MODE=paper.
+- Keep LIVE_TRADING_ENABLED=false.
+- Confirm the dashboard starts Strategy v2 at about $10,000.
+- Let V2 collect a fresh independent sample.
+- Do not enable live trading until V2 independently satisfies the live gate.

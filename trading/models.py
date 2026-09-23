@@ -1,5 +1,7 @@
 from django.db import models
 from django.utils import timezone
+from trading.constants import STRATEGY_VERSION_SLUG
+
 
 class AppConfig(models.Model):
     name = models.CharField(max_length=80, unique=True, default="default")
@@ -23,6 +25,7 @@ class AppConfig(models.Model):
     def current(cls):
         obj, _ = cls.objects.get_or_create(name="default")
         return obj
+
 
 class MarketSignal(models.Model):
     symbol = models.CharField(max_length=24, db_index=True)
@@ -52,6 +55,7 @@ class MarketSignal(models.Model):
         ordering = ["-observed_at", "-score"]
         indexes = [models.Index(fields=["symbol", "-observed_at"])]
 
+
 class PaperAccount(models.Model):
     name = models.CharField(max_length=80, unique=True, default="primary")
     starting_cash = models.FloatField(default=10000)
@@ -65,12 +69,22 @@ class PaperAccount(models.Model):
     @classmethod
     def primary(cls):
         cfg = AppConfig.current()
-        obj, _ = cls.objects.get_or_create(name="primary", defaults={"starting_cash": cfg.paper_starting_cash, "cash": cfg.paper_starting_cash, "equity": cfg.paper_starting_cash, "peak_equity": cfg.paper_starting_cash})
+        account_name = f"primary-{STRATEGY_VERSION_SLUG}"
+        obj, _ = cls.objects.get_or_create(
+            name=account_name,
+            defaults={
+                "starting_cash": cfg.paper_starting_cash,
+                "cash": cfg.paper_starting_cash,
+                "equity": cfg.paper_starting_cash,
+                "peak_equity": cfg.paper_starting_cash,
+            },
+        )
         return obj
 
+
 class Trade(models.Model):
-    MODE_CHOICES = [("paper","Paper"),("testnet","Testnet"),("live","Live")]
-    STATUS_CHOICES = [("open","Open"),("closed","Closed"),("rejected","Rejected"),("error","Error")]
+    MODE_CHOICES = [("paper", "Paper"), ("testnet", "Testnet"), ("live", "Live")]
+    STATUS_CHOICES = [("open", "Open"), ("closed", "Closed"), ("rejected", "Rejected"), ("error", "Error")]
     mode = models.CharField(max_length=10, choices=MODE_CHOICES, default="paper", db_index=True)
     symbol = models.CharField(max_length=24, db_index=True)
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="open", db_index=True)
@@ -95,6 +109,7 @@ class Trade(models.Model):
     class Meta:
         ordering = ["-opened_at"]
 
+
 class BacktestRun(models.Model):
     symbol = models.CharField(max_length=24)
     timeframe = models.CharField(max_length=8)
@@ -113,6 +128,7 @@ class BacktestRun(models.Model):
     class Meta:
         ordering = ["-started_at"]
 
+
 class LiveGate(models.Model):
     checked_at = models.DateTimeField(default=timezone.now)
     eligible = models.BooleanField(default=False)
@@ -127,6 +143,7 @@ class LiveGate(models.Model):
 
     class Meta:
         ordering = ["-checked_at"]
+
 
 class AuditEvent(models.Model):
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
