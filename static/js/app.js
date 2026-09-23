@@ -1,0 +1,1 @@
+function tick(){const el=document.getElementById('clock');if(el)el.textContent=new Date().toLocaleString()}tick();setInterval(tick,1000);setInterval(async()=>{try{const r=await fetch('/api/status/');if(r.ok){const j=await r.json();document.documentElement.dataset.liveGate=j.live_gate?'1':'0'}}catch(e){}},30000);
