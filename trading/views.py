@@ -3,6 +3,7 @@ from django.contrib import messages
 from django.http import JsonResponse
 from django.shortcuts import render, redirect
 from django.db.models import Sum
+from django.utils import timezone
 from .models import AppConfig, MarketSignal, PaperAccount, Trade, BacktestRun, LiveGate, AuditEvent
 from .forms import AppConfigForm
 from .services.live_gate import evaluate
@@ -40,11 +41,38 @@ def paper_pnl_snapshot(account: PaperAccount) -> dict:
     }
 
 
+def current_live_gate(account: PaperAccount):
+    """
+    Re-evaluate the gate only when the saved snapshot is stale.
+
+    A gate snapshot is stale when:
+    - the number of closed paper trades has changed,
+    - the paper-testing day count has changed, or
+    - max drawdown has changed.
+    """
+    gate = LiveGate.objects.first()
+
+    closed_count = Trade.objects.filter(mode="paper", status="closed").count()
+    first_trade = Trade.objects.filter(mode="paper").order_by("opened_at").first()
+    start_date = first_trade.opened_at.date() if first_trade else account.created_at.date()
+    current_days = max((timezone.localdate() - start_date).days, 0)
+
+    if (
+        gate is None
+        or gate.closed_trades != closed_count
+        or gate.paper_days != current_days
+        or abs(float(gate.max_drawdown_pct) - float(account.max_drawdown_pct)) > 1e-9
+    ):
+        gate = evaluate()
+
+    return gate
+
+
 @login_required
 def dashboard(request):
     acct = mark_to_market(PaperAccount.primary())
     pnl = paper_pnl_snapshot(acct)
-    gate = LiveGate.objects.first() or evaluate()
+    gate = current_live_gate(acct)
     open_trades = Trade.objects.filter(mode="paper", status="open")[:8]
     return render(
         request,
