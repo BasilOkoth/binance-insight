@@ -1,1 +1,78 @@
-{% extends 'base.html' %}{% block heading %}Command Center{% endblock %}{% block content %}<section class="hero"><div><div class="kicker">PAPER EQUITY</div><div class="hero-value">${{ account.equity|floatformat:2 }}</div><div class="muted">Cash ${{ account.cash|floatformat:2 }} · P/L ${{ paper_pnl|floatformat:2 }}</div></div><div class="gate {% if gate.eligible %}ok{% endif %}"><span>LIVE GATE</span><b>{% if gate.eligible %}ELIGIBLE{% else %}LOCKED{% endif %}</b><small>{{ gate.closed_trades }} closed trades · {{ gate.paper_days }} days</small></div></section><div class="grid4"><div class="card"><span>Max drawdown</span><b>{{ account.max_drawdown_pct|floatformat:2 }}%</b></div><div class="card"><span>Profit factor</span><b>{{ gate.profit_factor|floatformat:2 }}</b></div><div class="card"><span>Expectancy</span><b>${{ gate.expectancy|floatformat:2 }}</b></div><div class="card"><span>Paper net</span><b>${{ gate.net_profit|floatformat:2 }}</b></div></div><section class="panel"><div class="panel-head"><h2>Opportunity Radar</h2><a href="{% url 'scanner' %}">Open scanner →</a></div><div class="table-wrap"><table><thead><tr><th>Pair</th><th>Score</th><th>Price</th><th>Trend</th><th>Momentum</th><th>Volume</th><th>Regime</th><th>Status</th></tr></thead><tbody>{% for s in signals %}<tr><td><b>{{ s.symbol }}</b></td><td><span class="score">{{ s.score|floatformat:0 }}</span></td><td>{{ s.price|floatformat:6 }}</td><td>{{ s.trend_score|floatformat:0 }}</td><td>{{ s.momentum_score|floatformat:0 }}</td><td>{{ s.volume_score|floatformat:0 }}</td><td>{{ s.regime_score|floatformat:0 }}</td><td>{% if s.is_actionable %}<span class="pill good">SETUP</span>{% else %}<span class="pill">WATCH</span>{% endif %}</td></tr>{% empty %}<tr><td colspan="8">Run your first market scan.</td></tr>{% endfor %}</tbody></table></div></section><div class="twocol"><section class="panel"><div class="panel-head"><h2>Open paper positions</h2></div>{% for t in open_trades %}<div class="trade-row"><b>{{ t.symbol }}</b><span>Entry {{ t.entry_price|floatformat:5 }}</span><span>Stop {{ t.stop_price|floatformat:5 }}</span><span>Target {{ t.target_price|floatformat:5 }}</span></div>{% empty %}<p class="muted">No paper positions yet.</p>{% endfor %}</section><section class="panel"><div class="panel-head"><h2>Audit trail</h2></div>{% for e in events %}<div class="event"><span>{{ e.level }}</span><div><b>{{ e.category }}</b><small>{{ e.message }}</small></div></div>{% endfor %}</section></div>{% endblock %}
+{% extends 'base.html' %}
+{% block heading %}Command Center{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <div class="kicker">PAPER EQUITY</div>
+    <div class="hero-value">${{ account.equity|floatformat:2 }}</div>
+    <div class="muted">Cash ${{ account.cash|floatformat:2 }} · Total P/L ${{ total_pnl|floatformat:2 }}</div>
+  </div>
+  <div class="gate {% if gate.eligible %}ok{% endif %}">
+    <span>LIVE GATE</span>
+    <b>{% if gate.eligible %}ELIGIBLE{% else %}LOCKED{% endif %}</b>
+    <small>{{ gate.closed_trades }} closed trades · {{ gate.paper_days }} days</small>
+  </div>
+</section>
+
+<div class="grid4">
+  <div class="card"><span>Realized P/L</span><b>${{ realized_pnl|floatformat:2 }}</b></div>
+  <div class="card"><span>Unrealized P/L</span><b>${{ unrealized_pnl|floatformat:2 }}</b></div>
+  <div class="card"><span>Total P/L</span><b>${{ total_pnl|floatformat:2 }}</b></div>
+  <div class="card"><span>Max drawdown</span><b>{{ account.max_drawdown_pct|floatformat:2 }}%</b></div>
+</div>
+
+<div class="grid4">
+  <div class="card"><span>Profit factor</span><b>{{ gate.profit_factor|floatformat:2 }}</b></div>
+  <div class="card"><span>Expectancy</span><b>${{ gate.expectancy|floatformat:2 }}</b></div>
+  <div class="card"><span>Closed trades</span><b>{{ gate.closed_trades }}</b></div>
+  <div class="card"><span>Paper days</span><b>{{ gate.paper_days }}</b></div>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Opportunity Radar</h2><a href="{% url 'scanner' %}">Open scanner →</a></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>Score</th><th>Price</th><th>Trend</th><th>Momentum</th><th>Volume</th><th>Regime</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for s in signals %}
+        <tr>
+          <td><b>{{ s.symbol }}</b></td>
+          <td><span class="score">{{ s.score|floatformat:0 }}</span></td>
+          <td>{{ s.price|floatformat:6 }}</td>
+          <td>{{ s.trend_score|floatformat:0 }}</td>
+          <td>{{ s.momentum_score|floatformat:0 }}</td>
+          <td>{{ s.volume_score|floatformat:0 }}</td>
+          <td>{{ s.regime_score|floatformat:0 }}</td>
+          <td>{% if s.is_actionable %}<span class="pill good">SETUP</span>{% else %}<span class="pill">WATCH</span>{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8">Run your first market scan.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="twocol">
+  <section class="panel">
+    <div class="panel-head"><h2>Open paper positions</h2></div>
+    {% for t in open_trades %}
+    <div class="trade-row">
+      <b>{{ t.symbol }}</b>
+      <span>Entry {{ t.entry_price|floatformat:5 }}</span>
+      <span>Stop {{ t.stop_price|floatformat:5 }}</span>
+      <span>Target {{ t.target_price|floatformat:5 }}</span>
+    </div>
+    {% empty %}
+    <p class="muted">No paper positions yet.</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Audit trail</h2></div>
+    {% for e in events %}
+    <div class="event"><span>{{ e.level }}</span><div><b>{{ e.category }}</b><small>{{ e.message }}</small></div></div>
+    {% endfor %}
+  </section>
+</div>
+{% endblock %}
