@@ -4,89 +4,178 @@
 <style>
   .bt-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:14px 0 18px}
   .bt-card{padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025)}
-  .bt-card .label{font-size:.78rem;opacity:.7;text-transform:uppercase;letter-spacing:.04em}
-  .bt-card .value{font-size:1.3rem;font-weight:700;margin-top:4px}
+  .bt-card .label{font-size:.76rem;opacity:.7;text-transform:uppercase;letter-spacing:.04em}
+  .bt-card .value{font-size:1.28rem;font-weight:700;margin-top:4px}
+  .bt-card .sub{font-size:.78rem;opacity:.65;margin-top:4px}
   .matrix-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
   .matrix-progress{display:none;margin-top:14px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.02)}
   .matrix-progress progress{width:100%;height:14px;margin:10px 0}
   .matrix-log{font-size:.9rem;opacity:.85;min-height:1.4em}
   .sample{font-size:.78rem;white-space:nowrap}
-  .sample-very-low{opacity:.6}
-  .sample-low{opacity:.75}
-  .sample-moderate{font-weight:600}
-  .sample-stronger{font-weight:700}
-  .small-note{font-size:.86rem;opacity:.7}
+  .sample-very-low{opacity:.6}.sample-low{opacity:.75}.sample-moderate{font-weight:600}.sample-stronger{font-weight:700}
+  .small-note{font-size:.86rem;opacity:.72}
+  .research-hero{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.035)}
+  .research-form{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-top:14px}
+  .research-form label{display:flex;flex-direction:column;gap:5px}
+  .research-form select{min-width:150px}
+  .candidate-pass{font-weight:700}.candidate-fail{opacity:.72}
+  .split-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px}
+  .split-box{padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px}
+  .metric-line{display:flex;justify-content:space-between;gap:18px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .metric-line:last-child{border-bottom:0}
+  details.panel-summary summary{cursor:pointer;font-weight:700;font-size:1.05rem}
+  .nowrap{white-space:nowrap}
 </style>
 
-<div class="toolbar">
+<section class="panel research-hero">
   <div>
-    <p>Replay the same Strategy v{{ strategy_version }} score and risk logic over Binance candles with configured fees and slippage.</p>
-    <p class="muted">Backtest engine v{{ backtest_engine_version }} normalizes the 24-hour volume window and 24-hour maximum holding period across every timeframe.</p>
+    <p class="eyebrow">RESEARCH ENGINE v{{ research_engine_version }}</p>
+    <h2>Multi-year validation lab</h2>
+    <p>Test the frozen Strategy v{{ strategy_version }} rules over 1h and 4h data without changing the paper or live engine. The default study uses three years of history, keeps everything before {{ research_split_date }} as historical/training context, and evaluates 2026 onward separately as out-of-sample.</p>
+    <p class="small-note">4h candles are built only from complete 1h bars. Score bands and fixed-rule 90-day walk-forward windows are calculated from the same trades. “Research candidate” is an internal validation flag, not a prediction or guarantee.</p>
   </div>
-  <form method="post" class="inline" id="single-backtest-form">
+
+  <form method="post" class="research-form" id="research-one-form">
     {% csrf_token %}
+    <input type="hidden" name="research_one" value="1">
     <label>
       <span>Pair</span>
-      <select name="symbol" aria-label="Backtest pair">
+      <select name="symbol">
         {% for symbol in backtest_symbols %}
-          <option value="{{ symbol }}" {% if symbol == selected_symbol %}selected{% endif %}>{{ symbol }}</option>
+          <option value="{{ symbol }}" {% if symbol == research_selected_symbol %}selected{% endif %}>{{ symbol }}</option>
         {% endfor %}
       </select>
     </label>
     <label>
       <span>Timeframe</span>
-      <select name="interval" aria-label="Backtest timeframe">
-        {% for value, label in backtest_intervals %}
-          <option value="{{ value }}" {% if value == selected_interval %}selected{% endif %}>{{ label }} ({{ value }})</option>
+      <select name="research_interval">
+        {% for value, label in research_intervals %}
+          <option value="{{ value }}" {% if value == research_selected_interval %}selected{% endif %}>{{ label }} ({{ value }})</option>
         {% endfor %}
       </select>
     </label>
-    <button type="submit">Run one backtest</button>
+    <label>
+      <span>History</span>
+      <select name="research_days">
+        {% for value, label in research_lookback_choices %}
+          <option value="{{ value }}" {% if value == research_selected_days %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Run deep research</button>
   </form>
-</div>
+</section>
 
 <section class="panel">
-  <h2>Full matrix</h2>
-  <p>Run all {{ matrix_total }} combinations: {{ backtest_symbols|length }} core pairs × {{ backtest_intervals|length }} timeframes. The browser runs one symbol at a time and stores all four timeframe results before moving to the next symbol.</p>
+  <h2>Research matrix</h2>
+  <p>Run all {{ research_matrix_total }} multi-year studies: {{ backtest_symbols|length }} core pairs × 2 research timeframes. The browser runs one pair at a time and stores both 1h and 4h studies.</p>
   <div class="matrix-actions">
-    <button type="button" id="run-matrix">Run full matrix ({{ matrix_total }})</button>
-    <button type="button" id="stop-matrix" style="display:none">Stop after current pair</button>
-    <span class="small-note">Keep this tab open while the matrix is running.</span>
+    <button type="button" id="run-research-matrix">Run research matrix ({{ research_matrix_total }})</button>
+    <button type="button" id="stop-research-matrix" style="display:none">Stop after current pair</button>
+    <span class="small-note">Default matrix history: 3 years. Keep this tab open while it runs.</span>
   </div>
-  <div class="matrix-progress" id="matrix-progress-box">
-    <strong id="matrix-status">Preparing matrix…</strong>
-    <progress id="matrix-progress" max="{{ matrix_total }}" value="0"></progress>
-    <div class="matrix-log" id="matrix-log"></div>
+  <div class="matrix-progress" id="research-progress-box">
+    <strong id="research-status">Preparing research matrix…</strong>
+    <progress id="research-progress" max="{{ research_matrix_total }}" value="0"></progress>
+    <div class="matrix-log" id="research-log"></div>
   </div>
 </section>
 
 <section class="panel">
-  <h2>Matrix summary</h2>
+  <h2>Research summary — 3-year studies</h2>
   <div class="bt-grid">
-    <div class="bt-card"><div class="label">Coverage</div><div class="value">{{ matrix_summary.coverage }}/{{ matrix_summary.total }}</div></div>
-    <div class="bt-card"><div class="label">Positive combinations</div><div class="value">{{ matrix_summary.positive }}</div></div>
-    <div class="bt-card"><div class="label">Robust candidates</div><div class="value">{{ matrix_summary.robust }}</div></div>
-    <div class="bt-card"><div class="label">Engine</div><div class="value">v{{ backtest_engine_version }}</div></div>
+    <div class="bt-card"><div class="label">Coverage</div><div class="value">{{ research_summary.coverage }}/{{ research_summary.total }}</div></div>
+    <div class="bt-card"><div class="label">Positive OOS</div><div class="value">{{ research_summary.positive_oos }}</div><div class="sub">PF &gt; 1, positive return + expectancy R</div></div>
+    <div class="bt-card"><div class="label">Research candidates</div><div class="value">{{ research_summary.candidates }}</div><div class="sub">Stricter OOS + stability checks</div></div>
+    <div class="bt-card"><div class="label">OOS begins</div><div class="value">{{ research_split_date }}</div></div>
   </div>
-  <p class="small-note">“Robust candidate” here only means ≥50 trades, positive net return and expectancy, and profit factor ≥1.25 in this historical test. It is not proof of future profitability.</p>
 
   <div class="table-wrap">
     <table>
       <thead>
-        <tr>
-          <th>Timeframe</th><th>Coverage</th><th>Median PF</th><th>Median return</th><th>Median expectancy</th><th>Positive</th><th>Robust</th>
-        </tr>
+        <tr><th>TF</th><th>Coverage</th><th>Median OOS trades</th><th>Median OOS PF</th><th>Median OOS return</th><th>Median OOS Exp R</th><th>Positive OOS</th><th>Candidates</th></tr>
       </thead>
       <tbody>
-        {% for row in matrix_summary.timeframes %}
+        {% for row in research_summary.timeframes %}
           <tr>
             <td><b>{{ row.interval }}</b></td>
             <td>{{ row.coverage }}/{{ backtest_symbols|length }}</td>
-            <td>{% if row.median_pf != None %}{{ row.median_pf|floatformat:2 }}{% else %}—{% endif %}</td>
-            <td>{% if row.median_return != None %}{{ row.median_return|floatformat:2 }}%{% else %}—{% endif %}</td>
-            <td>{% if row.median_expectancy != None %}{{ row.median_expectancy|floatformat:2 }}%{% else %}—{% endif %}</td>
-            <td>{{ row.positive }}</td>
-            <td>{{ row.robust }}</td>
+            <td>{% if row.median_oos_trades != None %}{{ row.median_oos_trades|floatformat:0 }}{% else %}—{% endif %}</td>
+            <td>{% if row.median_oos_pf != None %}{{ row.median_oos_pf|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td>{% if row.median_oos_return != None %}{{ row.median_oos_return|floatformat:2 }}%{% else %}—{% endif %}</td>
+            <td>{% if row.median_oos_expectancy_r != None %}{{ row.median_oos_expectancy_r|floatformat:2 }}R{% else %}—{% endif %}</td>
+            <td>{{ row.positive_oos }}</td>
+            <td>{{ row.candidates }}</td>
+          </tr>
+        {% empty %}<tr><td colspan="8">No Research Engine v{{ research_engine_version }} matrix results yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% if research_detail %}
+<section class="panel">
+  <h2>{{ research_detail.symbol }} {{ research_detail.timeframe }} — deep research</h2>
+  <p class="small-note">{{ research_detail.research_days }} days · split {{ research_detail.research_split_date }} · Research Engine v{{ research_engine_version }}</p>
+
+  <div class="bt-grid">
+    <div class="bt-card"><div class="label">Full trades</div><div class="value">{{ research_detail.research_full.trades }}</div></div>
+    <div class="bt-card"><div class="label">OOS trades</div><div class="value">{{ research_detail.research_oos.trades }}</div></div>
+    <div class="bt-card"><div class="label">OOS PF</div><div class="value">{{ research_detail.research_oos.profit_factor|floatformat:2 }}</div></div>
+    <div class="bt-card"><div class="label">OOS return</div><div class="value">{{ research_detail.research_oos.net_return_pct|floatformat:2 }}%</div></div>
+    <div class="bt-card"><div class="label">OOS expectancy</div><div class="value">{{ research_detail.research_oos.expectancy_r|floatformat:2 }}R</div></div>
+    <div class="bt-card"><div class="label">Positive windows</div><div class="value">{{ research_detail.research_walk.positive_window_pct|floatformat:0 }}%</div></div>
+    <div class="bt-card">
+      <div class="label">Research candidate</div>
+      <div class="value {% if research_detail.research_candidate %}candidate-pass{% else %}candidate-fail{% endif %}">{% if research_detail.research_candidate %}YES{% else %}NO{% endif %}</div>
+    </div>
+  </div>
+
+  <div class="split-grid">
+    <div class="split-box">
+      <h3>Pre-2026 history</h3>
+      <div class="metric-line"><span>Trades</span><b>{{ research_detail.research_train.trades }}</b></div>
+      <div class="metric-line"><span>Win rate</span><b>{{ research_detail.research_train.win_rate_pct|floatformat:1 }}%</b></div>
+      <div class="metric-line"><span>Profit factor</span><b>{{ research_detail.research_train.profit_factor|floatformat:2 }}</b></div>
+      <div class="metric-line"><span>Return</span><b>{{ research_detail.research_train.net_return_pct|floatformat:2 }}%</b></div>
+      <div class="metric-line"><span>Expectancy R</span><b>{{ research_detail.research_train.expectancy_r|floatformat:2 }}R</b></div>
+      <div class="metric-line"><span>Max DD</span><b>{{ research_detail.research_train.max_drawdown_pct|floatformat:2 }}%</b></div>
+    </div>
+    <div class="split-box">
+      <h3>2026 out-of-sample</h3>
+      <div class="metric-line"><span>Trades</span><b>{{ research_detail.research_oos.trades }}</b></div>
+      <div class="metric-line"><span>Win rate</span><b>{{ research_detail.research_oos.win_rate_pct|floatformat:1 }}%</b></div>
+      <div class="metric-line"><span>Profit factor</span><b>{{ research_detail.research_oos.profit_factor|floatformat:2 }}</b></div>
+      <div class="metric-line"><span>Return</span><b>{{ research_detail.research_oos.net_return_pct|floatformat:2 }}%</b></div>
+      <div class="metric-line"><span>Expectancy R</span><b>{{ research_detail.research_oos.expectancy_r|floatformat:2 }}R</b></div>
+      <div class="metric-line"><span>Max DD</span><b>{{ research_detail.research_oos.max_drawdown_pct|floatformat:2 }}%</b></div>
+    </div>
+  </div>
+
+  {% if not research_detail.research_candidate %}
+    <p class="small-note"><b>Why it does not pass:</b> {% for reason in research_detail.research_candidate_data.reasons %}{{ reason }}{% if not forloop.last %}; {% endif %}{% endfor %}.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Score-band diagnostics</h2>
+  <p class="small-note">This tests whether higher Strategy v{{ strategy_version }} scores actually correspond to better trade outcomes. It describes trades taken by the frozen strategy; it does not silently change the entry threshold.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Score</th><th>Full trades</th><th>Full PF</th><th>Full Exp R</th><th>OOS trades</th><th>OOS win rate</th><th>OOS PF</th><th>OOS Exp R</th></tr>
+      </thead>
+      <tbody>
+        {% for band in research_detail.research_bands %}
+          <tr>
+            <td><b>{{ band.label }}</b></td>
+            <td>{{ band.full.trades }}</td>
+            <td>{{ band.full.profit_factor|floatformat:2 }}</td>
+            <td>{{ band.full.expectancy_r|floatformat:2 }}R</td>
+            <td>{{ band.oos.trades }}</td>
+            <td>{{ band.oos.win_rate_pct|floatformat:1 }}%</td>
+            <td>{{ band.oos.profit_factor|floatformat:2 }}</td>
+            <td>{{ band.oos.expectancy_r|floatformat:2 }}R</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -95,134 +184,217 @@
 </section>
 
 <section class="panel">
-  <h2>Latest result for each pair/timeframe</h2>
+  <h2>Fixed-rule walk-forward stability</h2>
+  <p class="small-note">The strategy remains frozen. The 2026 OOS period is divided into sequential {{ research_detail.research_walk.window_days }}-day windows. A window is evaluable with at least 3 trades; it is positive only when return and expectancy R are positive and PF is above 1.</p>
+  <div class="bt-grid">
+    <div class="bt-card"><div class="label">Evaluable windows</div><div class="value">{{ research_detail.research_walk.evaluable_windows }}</div></div>
+    <div class="bt-card"><div class="label">Positive windows</div><div class="value">{{ research_detail.research_walk.positive_windows }}</div></div>
+    <div class="bt-card"><div class="label">Positive share</div><div class="value">{{ research_detail.research_walk.positive_window_pct|floatformat:0 }}%</div></div>
+    <div class="bt-card"><div class="label">Median window PF</div><div class="value">{{ research_detail.research_walk.median_profit_factor|floatformat:2 }}</div></div>
+    <div class="bt-card"><div class="label">Median window Exp R</div><div class="value">{{ research_detail.research_walk.median_expectancy_r|floatformat:2 }}R</div></div>
+  </div>
   <div class="table-wrap">
     <table>
-      <thead>
-        <tr>
-          <th>Pair</th><th>TF</th><th>Trades</th><th>Sample</th><th>Win rate</th><th>Net return</th><th>Profit factor</th><th>Max DD</th><th>Expectancy</th><th>Expectancy R</th><th>Sharpe</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Window</th><th>Trades</th><th>PF</th><th>Return</th><th>Exp R</th><th>Max DD</th><th>Status</th></tr></thead>
       <tbody>
-        {% for r in runs %}
+        {% for window in research_detail.research_walk.windows %}
           <tr>
-            <td><b>{{ r.symbol }}</b></td>
-            <td>{{ r.timeframe }}</td>
-            <td>{{ r.trades }}</td>
-            <td><span class="sample sample-{{ r.sample_slug }}">{{ r.sample_quality }}</span></td>
-            <td>{{ r.win_rate_pct|floatformat:1 }}%</td>
-            <td>{{ r.net_return_pct|floatformat:2 }}%</td>
-            <td>{{ r.profit_factor|floatformat:2 }}</td>
-            <td>{{ r.max_drawdown_pct|floatformat:2 }}%</td>
-            <td>{{ r.expectancy_pct|floatformat:2 }}%</td>
-            <td>{{ r.expectancy_r|floatformat:2 }}R</td>
-            <td>{{ r.sharpe|floatformat:2 }}</td>
+            <td class="nowrap">{{ window.start }} → {{ window.end }}</td>
+            <td>{{ window.metrics.trades }}</td>
+            <td>{{ window.metrics.profit_factor|floatformat:2 }}</td>
+            <td>{{ window.metrics.net_return_pct|floatformat:2 }}%</td>
+            <td>{{ window.metrics.expectancy_r|floatformat:2 }}R</td>
+            <td>{{ window.metrics.max_drawdown_pct|floatformat:2 }}%</td>
+            <td>{% if not window.evaluable %}Insufficient{% elif window.positive %}<b>Positive</b>{% else %}Negative{% endif %}</td>
           </tr>
-        {% empty %}
-          <tr><td colspan="11">No engine v{{ backtest_engine_version }} backtests yet. Run one test or start the full matrix.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </section>
+{% else %}
+<section class="panel">
+  <h2>Deep research detail</h2>
+  <p>No v{{ research_engine_version }} result yet for {{ research_selected_symbol }} {{ research_selected_interval }} with the selected history. Run the deep research form above.</p>
+</section>
+{% endif %}
 
-{{ backtest_symbols|json_script:"matrix-symbols" }}
+<section class="panel">
+  <h2>Latest 3-year research result for each pair/timeframe</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>TF</th><th>Full trades</th><th>OOS trades</th><th>OOS PF</th><th>OOS return</th><th>OOS Exp R</th><th>Positive windows</th><th>Candidate</th></tr></thead>
+      <tbody>
+        {% for r in research_runs %}
+          <tr>
+            <td><b>{{ r.symbol }}</b></td><td>{{ r.timeframe }}</td><td>{{ r.trades }}</td><td>{{ r.research_oos_trades }}</td>
+            <td>{{ r.research_oos_pf|floatformat:2 }}</td><td>{{ r.research_oos_return|floatformat:2 }}%</td><td>{{ r.research_oos_expectancy_r|floatformat:2 }}R</td>
+            <td>{{ r.research_positive_window_pct|floatformat:0 }}%</td><td>{% if r.research_candidate %}<b>YES</b>{% else %}No{% endif %}</td>
+          </tr>
+        {% empty %}<tr><td colspan="9">No 3-year research matrix results yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<details class="panel panel-summary">
+  <summary>Quick 180-day matrix — Backtest Engine v{{ backtest_engine_version }}</summary>
+  <div class="toolbar" style="margin-top:16px">
+    <div>
+      <p>Keep the existing short-horizon matrix available for comparison. It does not alter the Research Engine v{{ research_engine_version }} results.</p>
+      <p class="small-note">Engine v{{ backtest_engine_version }} normalizes the 24-hour volume window and 24-hour maximum holding period across every timeframe.</p>
+    </div>
+    <form method="post" class="inline" id="single-backtest-form">
+      {% csrf_token %}
+      <label><span>Pair</span><select name="symbol">{% for symbol in backtest_symbols %}<option value="{{ symbol }}" {% if symbol == selected_symbol %}selected{% endif %}>{{ symbol }}</option>{% endfor %}</select></label>
+      <label><span>Timeframe</span><select name="interval">{% for value, label in backtest_intervals %}<option value="{{ value }}" {% if value == selected_interval %}selected{% endif %}>{{ label }} ({{ value }})</option>{% endfor %}</select></label>
+      <button type="submit">Run one quick backtest</button>
+    </form>
+  </div>
+
+  <div class="matrix-actions">
+    <button type="button" id="run-matrix">Run quick matrix ({{ matrix_total }})</button>
+    <button type="button" id="stop-matrix" style="display:none">Stop after current pair</button>
+  </div>
+  <div class="matrix-progress" id="matrix-progress-box">
+    <strong id="matrix-status">Preparing quick matrix…</strong>
+    <progress id="matrix-progress" max="{{ matrix_total }}" value="0"></progress>
+    <div class="matrix-log" id="matrix-log"></div>
+  </div>
+
+  <div class="bt-grid">
+    <div class="bt-card"><div class="label">Coverage</div><div class="value">{{ matrix_summary.coverage }}/{{ matrix_summary.total }}</div></div>
+    <div class="bt-card"><div class="label">Positive</div><div class="value">{{ matrix_summary.positive }}</div></div>
+    <div class="bt-card"><div class="label">Robust</div><div class="value">{{ matrix_summary.robust }}</div></div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>TF</th><th>Trades</th><th>Sample</th><th>Win rate</th><th>Net return</th><th>PF</th><th>Max DD</th><th>Expectancy</th><th>Exp R</th><th>Sharpe</th></tr></thead>
+      <tbody>
+        {% for r in runs %}<tr><td><b>{{ r.symbol }}</b></td><td>{{ r.timeframe }}</td><td>{{ r.trades }}</td><td><span class="sample sample-{{ r.sample_slug }}">{{ r.sample_quality }}</span></td><td>{{ r.win_rate_pct|floatformat:1 }}%</td><td>{{ r.net_return_pct|floatformat:2 }}%</td><td>{{ r.profit_factor|floatformat:2 }}</td><td>{{ r.max_drawdown_pct|floatformat:2 }}%</td><td>{{ r.expectancy_pct|floatformat:2 }}%</td><td>{{ r.expectancy_r|floatformat:2 }}R</td><td>{{ r.sharpe|floatformat:2 }}</td></tr>
+        {% empty %}<tr><td colspan="11">No quick-matrix results yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+{{ backtest_symbols|json_script:"research-matrix-symbols" }}
+{{ backtest_symbols|json_script:"quick-matrix-symbols" }}
 <script>
 (() => {
-  const runButton = document.getElementById('run-matrix');
-  const stopButton = document.getElementById('stop-matrix');
-  const box = document.getElementById('matrix-progress-box');
-  const progress = document.getElementById('matrix-progress');
-  const status = document.getElementById('matrix-status');
-  const log = document.getElementById('matrix-log');
-  const form = document.getElementById('single-backtest-form');
-  const csrf = form.querySelector('input[name="csrfmiddlewaretoken"]').value;
-  const symbols = JSON.parse(document.getElementById('matrix-symbols').textContent);
-  const intervalsPerSymbol = {{ backtest_intervals|length }};
-  const total = symbols.length * intervalsPerSymbol;
-  let stopRequested = false;
-  let running = false;
+  const researchRun = document.getElementById('run-research-matrix');
+  const researchStop = document.getElementById('stop-research-matrix');
+  const researchBox = document.getElementById('research-progress-box');
+  const researchProgress = document.getElementById('research-progress');
+  const researchStatus = document.getElementById('research-status');
+  const researchLog = document.getElementById('research-log');
+  const researchForm = document.getElementById('research-one-form');
+  const csrf = researchForm.querySelector('input[name="csrfmiddlewaretoken"]').value;
+  const researchSymbols = JSON.parse(document.getElementById('research-matrix-symbols').textContent);
+  const researchPerSymbol = 2;
+  const researchTotal = researchSymbols.length * researchPerSymbol;
+  let researchStopRequested = false;
+  let researchRunning = false;
 
-  stopButton.addEventListener('click', () => {
-    stopRequested = true;
-    stopButton.disabled = true;
-    stopButton.textContent = 'Stopping after current pair…';
+  researchStop.addEventListener('click', () => {
+    researchStopRequested = true;
+    researchStop.disabled = true;
+    researchStop.textContent = 'Stopping after current pair…';
   });
 
-  runButton.addEventListener('click', async () => {
-    if (running) return;
-    running = true;
-    stopRequested = false;
-    runButton.disabled = true;
-    stopButton.disabled = false;
-    stopButton.textContent = 'Stop after current pair';
-    stopButton.style.display = '';
-    box.style.display = 'block';
-    progress.max = total;
-    progress.value = 0;
-
+  researchRun.addEventListener('click', async () => {
+    if (researchRunning) return;
+    researchRunning = true;
+    researchStopRequested = false;
+    researchRun.disabled = true;
+    researchStop.disabled = false;
+    researchStop.textContent = 'Stop after current pair';
+    researchStop.style.display = '';
+    researchBox.style.display = 'block';
+    researchProgress.max = researchTotal;
+    researchProgress.value = 0;
     let completed = 0;
-    let failedPairs = 0;
-    let failedIntervals = 0;
+    let failed = 0;
 
-    for (let i = 0; i < symbols.length; i++) {
-      if (stopRequested) break;
-      const symbol = symbols[i];
-      status.textContent = `Running ${symbol} — pair ${i + 1}/${symbols.length}`;
-      log.textContent = `${completed}/${total} combinations stored so far.`;
-
+    for (let i = 0; i < researchSymbols.length; i++) {
+      if (researchStopRequested) break;
+      const symbol = researchSymbols[i];
+      researchStatus.textContent = `Researching ${symbol} — pair ${i + 1}/${researchSymbols.length}`;
+      researchLog.textContent = `${completed}/${researchTotal} studies stored so far.`;
       try {
         const body = new URLSearchParams();
         body.set('csrfmiddlewaretoken', csrf);
-        body.set('matrix_symbol', '1');
+        body.set('research_matrix_symbol', '1');
         body.set('symbol', symbol);
-
         const response = await fetch(window.location.pathname, {
           method: 'POST',
-          headers: {
-            'X-Requested-With': 'XMLHttpRequest',
-            'X-CSRFToken': csrf,
-            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
-          },
+          headers: {'X-Requested-With':'XMLHttpRequest','X-CSRFToken':csrf,'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
           body: body.toString()
         });
-
         let data = {};
         try { data = await response.json(); } catch (_) {}
-
         if (!response.ok || !data.ok) {
-          failedPairs += 1;
-          const attempted = data.completed || 0;
-          completed += attempted;
-          failedIntervals += Math.max(0, intervalsPerSymbol - attempted);
-          log.textContent = `${symbol} failed: ${data.error || 'unknown error'}`;
+          const done = data.completed || 0;
+          completed += done;
+          failed += Math.max(0, researchPerSymbol - done);
+          researchLog.textContent = `${symbol} failed: ${data.error || 'unknown error'}`;
         } else {
           completed += data.completed || 0;
-          failedIntervals += (data.errors || []).length;
-          log.textContent = `${symbol}: ${(data.completed || 0)}/${intervalsPerSymbol} timeframes completed.`;
+          failed += (data.errors || []).length;
+          researchLog.textContent = `${symbol}: ${(data.completed || 0)}/${researchPerSymbol} studies completed.`;
         }
       } catch (error) {
-        failedPairs += 1;
-        failedIntervals += intervalsPerSymbol;
-        log.textContent = `${symbol} request failed: ${error}`;
+        failed += researchPerSymbol;
+        researchLog.textContent = `${symbol} request failed: ${error}`;
       }
-
-      progress.value = Math.min(completed + failedIntervals, total);
+      researchProgress.value = Math.min(completed + failed, researchTotal);
     }
 
-    running = false;
-    runButton.disabled = false;
-    stopButton.style.display = 'none';
-
-    if (stopRequested) {
-      status.textContent = `Matrix stopped. ${completed} combinations were stored.`;
-      log.textContent = 'You can run the matrix again later; stored results remain available.';
+    researchRunning = false;
+    researchRun.disabled = false;
+    researchStop.style.display = 'none';
+    if (researchStopRequested) {
+      researchStatus.textContent = `Research matrix stopped. ${completed} studies stored.`;
       return;
     }
-
-    status.textContent = `Matrix finished: ${completed} stored, ${failedIntervals} failed.`;
-    log.textContent = failedPairs ? `${failedPairs} pair requests had one or more errors. Reloading results…` : 'All pair requests completed. Reloading results…';
+    researchStatus.textContent = `Research matrix finished: ${completed} stored, ${failed} failed.`;
+    researchLog.textContent = 'Reloading research results…';
     setTimeout(() => window.location.reload(), 1200);
+  });
+
+  const quickRun = document.getElementById('run-matrix');
+  const quickStop = document.getElementById('stop-matrix');
+  const quickBox = document.getElementById('matrix-progress-box');
+  const quickProgress = document.getElementById('matrix-progress');
+  const quickStatus = document.getElementById('matrix-status');
+  const quickLog = document.getElementById('matrix-log');
+  const quickForm = document.getElementById('single-backtest-form');
+  const quickSymbols = JSON.parse(document.getElementById('quick-matrix-symbols').textContent);
+  const quickPerSymbol = {{ backtest_intervals|length }};
+  const quickTotal = quickSymbols.length * quickPerSymbol;
+  let quickStopRequested = false;
+  let quickRunning = false;
+
+  quickStop.addEventListener('click', () => { quickStopRequested = true; quickStop.disabled = true; quickStop.textContent = 'Stopping after current pair…'; });
+  quickRun.addEventListener('click', async () => {
+    if (quickRunning) return;
+    quickRunning = true; quickStopRequested = false; quickRun.disabled = true; quickStop.disabled = false; quickStop.textContent = 'Stop after current pair'; quickStop.style.display = ''; quickBox.style.display = 'block'; quickProgress.max = quickTotal; quickProgress.value = 0;
+    let completed = 0, failed = 0;
+    for (let i = 0; i < quickSymbols.length; i++) {
+      if (quickStopRequested) break;
+      const symbol = quickSymbols[i]; quickStatus.textContent = `Running ${symbol} — pair ${i + 1}/${quickSymbols.length}`; quickLog.textContent = `${completed}/${quickTotal} combinations stored so far.`;
+      try {
+        const body = new URLSearchParams(); body.set('csrfmiddlewaretoken', csrf); body.set('matrix_symbol','1'); body.set('symbol',symbol);
+        const response = await fetch(window.location.pathname,{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':csrf,'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body.toString()});
+        let data={}; try{data=await response.json();}catch(_){}
+        if(!response.ok||!data.ok){const done=data.completed||0;completed+=done;failed+=Math.max(0,quickPerSymbol-done);quickLog.textContent=`${symbol} failed: ${data.error||'unknown error'}`;}else{completed+=data.completed||0;failed+=(data.errors||[]).length;quickLog.textContent=`${symbol}: ${(data.completed||0)}/${quickPerSymbol} completed.`;}
+      } catch(error){failed+=quickPerSymbol;quickLog.textContent=`${symbol} request failed: ${error}`;}
+      quickProgress.value=Math.min(completed+failed,quickTotal);
+    }
+    quickRunning=false;quickRun.disabled=false;quickStop.style.display='none';
+    if(quickStopRequested){quickStatus.textContent=`Quick matrix stopped. ${completed} stored.`;return;}
+    quickStatus.textContent=`Quick matrix finished: ${completed} stored, ${failed} failed.`;quickLog.textContent='Reloading…';setTimeout(()=>window.location.reload(),1200);
   });
 })();
 </script>

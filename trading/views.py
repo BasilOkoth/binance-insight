@@ -11,12 +11,21 @@ from django.urls import reverse
 from trading.constants import (
     STRATEGY_VERSION,
     BACKTEST_ENGINE_VERSION,
+    RESEARCH_ENGINE_VERSION,
+    RESEARCH_DEFAULT_DAYS,
+    RESEARCH_SPLIT_DATE,
+    RESEARCH_INTERVALS,
     CORE_BASES,
 )
 from .models import AppConfig, MarketSignal, PaperAccount, Trade, BacktestRun, LiveGate, AuditEvent
 from .forms import AppConfigForm
 from .services.live_gate import evaluate
-from .services.backtest import run_backtest, run_symbol_matrix
+from .services.backtest import (
+    run_backtest,
+    run_symbol_matrix,
+    run_research_backtest,
+    run_research_symbol,
+)
 from .services.scanner import scan_market
 from .services.paper import paper_cycle, mark_to_market
 
@@ -31,6 +40,12 @@ BACKTEST_INTERVALS = [
 BACKTEST_INTERVAL_VALUES = [value for value, _label in BACKTEST_INTERVALS]
 BACKTEST_INTERVAL_VALUE_SET = set(BACKTEST_INTERVAL_VALUES)
 BACKTEST_MATRIX_TOTAL = len(BACKTEST_SYMBOLS) * len(BACKTEST_INTERVALS)
+
+RESEARCH_INTERVAL_CHOICES = [("1h", "1 hour"), ("4h", "4 hours")]
+RESEARCH_INTERVAL_VALUE_SET = set(RESEARCH_INTERVALS)
+RESEARCH_LOOKBACK_CHOICES = [(730, "2 years"), (1095, "3 years")]
+RESEARCH_LOOKBACK_VALUE_SET = {value for value, _label in RESEARCH_LOOKBACK_CHOICES}
+RESEARCH_MATRIX_TOTAL = len(BACKTEST_SYMBOLS) * len(RESEARCH_INTERVAL_CHOICES)
 
 
 def _paper_trades():
@@ -169,7 +184,6 @@ def _sample_quality(trades: int) -> str:
 
 
 def _latest_backtest_matrix_runs():
-    """Return only the latest result for each pair/timeframe under engine 2.1."""
     qs = BacktestRun.objects.filter(
         results__strategy_version=STRATEGY_VERSION,
         results__backtest_engine_version=BACKTEST_ENGINE_VERSION,
@@ -178,6 +192,8 @@ def _latest_backtest_matrix_runs():
     seen = set()
     latest = []
     for run in qs[:1000]:
+        if (run.results or {}).get("research_mode"):
+            continue
         key = (run.symbol, run.timeframe)
         if key in seen:
             continue
@@ -238,6 +254,107 @@ def _matrix_summary(runs):
     }
 
 
+def _decorate_research_run(run):
+    data = dict(run.results or {})
+    run.research_full = data.get("full_metrics") or {}
+    run.research_train = data.get("train_metrics") or {}
+    run.research_oos = data.get("oos_metrics") or {}
+    run.research_bands = data.get("score_bands") or []
+    run.research_walk = data.get("walk_forward") or {}
+    run.research_candidate_data = data.get("candidate") or {"passes": False, "reasons": ["No candidate assessment stored."]}
+    run.research_candidate = bool(run.research_candidate_data.get("passes"))
+    run.research_days = int(data.get("lookback_days") or RESEARCH_DEFAULT_DAYS)
+    run.research_split_date = data.get("split_date") or RESEARCH_SPLIT_DATE
+    run.research_oos_trades = int(run.research_oos.get("trades") or 0)
+    run.research_oos_pf = float(run.research_oos.get("profit_factor") or 0.0)
+    run.research_oos_return = float(run.research_oos.get("net_return_pct") or 0.0)
+    run.research_oos_expectancy_r = float(run.research_oos.get("expectancy_r") or 0.0)
+    run.research_positive_window_pct = float(run.research_walk.get("positive_window_pct") or 0.0)
+    return run
+
+
+def _latest_research_runs(days=RESEARCH_DEFAULT_DAYS):
+    qs = BacktestRun.objects.filter(
+        results__strategy_version=STRATEGY_VERSION,
+        results__research_engine_version=RESEARCH_ENGINE_VERSION,
+        results__research_mode=True,
+        results__lookback_days=int(days),
+        results__split_date=RESEARCH_SPLIT_DATE,
+    ).order_by("-started_at")
+
+    seen = set()
+    latest = []
+    for run in qs[:500]:
+        key = (run.symbol, run.timeframe)
+        if key in seen:
+            continue
+        seen.add(key)
+        latest.append(_decorate_research_run(run))
+        if len(latest) >= RESEARCH_MATRIX_TOTAL:
+            break
+
+    interval_order = {value: idx for idx, value in enumerate(RESEARCH_INTERVALS)}
+    latest.sort(key=lambda r: (interval_order.get(r.timeframe, 99), r.symbol))
+    return latest
+
+
+def _research_summary(runs):
+    candidates = [r for r in runs if r.research_candidate]
+    positive_oos = [
+        r for r in runs
+        if r.research_oos_return > 0
+        and r.research_oos_expectancy_r > 0
+        and r.research_oos_pf > 1
+    ]
+
+    by_tf = []
+    for interval, label in RESEARCH_INTERVAL_CHOICES:
+        rows = [r for r in runs if r.timeframe == interval]
+        pfs = [r.research_oos_pf for r in rows if r.research_oos_pf < 900]
+        returns = [r.research_oos_return for r in rows]
+        exp_rs = [r.research_oos_expectancy_r for r in rows]
+        oos_trades = [r.research_oos_trades for r in rows]
+        by_tf.append(
+            {
+                "interval": interval,
+                "label": label,
+                "coverage": len(rows),
+                "median_oos_pf": median(pfs) if pfs else None,
+                "median_oos_return": median(returns) if returns else None,
+                "median_oos_expectancy_r": median(exp_rs) if exp_rs else None,
+                "median_oos_trades": median(oos_trades) if oos_trades else None,
+                "positive_oos": sum(
+                    1 for r in rows
+                    if r.research_oos_return > 0
+                    and r.research_oos_expectancy_r > 0
+                    and r.research_oos_pf > 1
+                ),
+                "candidates": sum(1 for r in rows if r.research_candidate),
+            }
+        )
+
+    return {
+        "coverage": len(runs),
+        "total": RESEARCH_MATRIX_TOTAL,
+        "positive_oos": len(positive_oos),
+        "candidates": len(candidates),
+        "timeframes": by_tf,
+    }
+
+
+def _latest_research_detail(symbol, interval, days):
+    run = BacktestRun.objects.filter(
+        symbol=symbol,
+        timeframe=interval,
+        results__strategy_version=STRATEGY_VERSION,
+        results__research_engine_version=RESEARCH_ENGINE_VERSION,
+        results__research_mode=True,
+        results__lookback_days=int(days),
+        results__split_date=RESEARCH_SPLIT_DATE,
+    ).order_by("-started_at").first()
+    return _decorate_research_run(run) if run else None
+
+
 @login_required
 def dashboard(request):
     acct = mark_to_market(PaperAccount.primary())
@@ -296,23 +413,111 @@ def paper_view(request):
 def backtest_view(request):
     selected_symbol = (request.GET.get("symbol") or "BTCUSDT").upper().strip()
     selected_interval = (request.GET.get("interval") or "15m").strip()
+    research_symbol = (request.GET.get("research_symbol") or "INJUSDT").upper().strip()
+    research_interval = (request.GET.get("research_interval") or "1h").strip()
+    try:
+        research_days = int(request.GET.get("research_days") or RESEARCH_DEFAULT_DAYS)
+    except (TypeError, ValueError):
+        research_days = RESEARCH_DEFAULT_DAYS
 
     if selected_symbol not in BACKTEST_SYMBOLS:
         selected_symbol = "BTCUSDT"
     if selected_interval not in BACKTEST_INTERVAL_VALUE_SET:
         selected_interval = "15m"
+    if research_symbol not in BACKTEST_SYMBOLS:
+        research_symbol = "INJUSDT"
+    if research_interval not in RESEARCH_INTERVAL_VALUE_SET:
+        research_interval = "1h"
+    if research_days not in RESEARCH_LOOKBACK_VALUE_SET:
+        research_days = RESEARCH_DEFAULT_DAYS
 
     if request.method == "POST":
         symbol = (request.POST.get("symbol") or "BTCUSDT").upper().strip()
         interval = (request.POST.get("interval") or "15m").strip()
         matrix_symbol = request.POST.get("matrix_symbol") == "1"
-        wants_json = matrix_symbol or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        research_one = request.POST.get("research_one") == "1"
+        research_matrix_symbol = request.POST.get("research_matrix_symbol") == "1"
+        wants_json = (
+            matrix_symbol
+            or research_matrix_symbol
+            or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        )
 
         if symbol not in BACKTEST_SYMBOLS:
             if wants_json:
                 return JsonResponse({"ok": False, "error": "Pair is outside the Strategy v2 core universe."}, status=400)
             messages.error(request, "Choose a pair from the approved Strategy v2 core universe.")
             return redirect("backtest")
+
+        if research_matrix_symbol:
+            try:
+                runs, errors = run_research_symbol(
+                    symbol,
+                    intervals=RESEARCH_INTERVALS,
+                    days=RESEARCH_DEFAULT_DAYS,
+                    split_date=RESEARCH_SPLIT_DATE,
+                )
+                payload = []
+                for r in runs:
+                    data = r.results or {}
+                    oos = data.get("oos_metrics") or {}
+                    candidate = data.get("candidate") or {}
+                    payload.append(
+                        {
+                            "symbol": r.symbol,
+                            "interval": r.timeframe,
+                            "trades": r.trades,
+                            "oos_trades": oos.get("trades", 0),
+                            "oos_return_pct": oos.get("net_return_pct", 0),
+                            "oos_profit_factor": oos.get("profit_factor", 0),
+                            "oos_expectancy_r": oos.get("expectancy_r", 0),
+                            "candidate": bool(candidate.get("passes")),
+                        }
+                    )
+                return JsonResponse(
+                    {
+                        "ok": bool(runs),
+                        "symbol": symbol,
+                        "completed": len(runs),
+                        "results": payload,
+                        "errors": errors,
+                    },
+                    status=200 if runs else 500,
+                )
+            except Exception as exc:
+                return JsonResponse({"ok": False, "symbol": symbol, "error": str(exc)}, status=500)
+
+        if research_one:
+            research_interval_post = (request.POST.get("research_interval") or "1h").strip()
+            try:
+                research_days_post = int(request.POST.get("research_days") or RESEARCH_DEFAULT_DAYS)
+            except (TypeError, ValueError):
+                research_days_post = RESEARCH_DEFAULT_DAYS
+
+            if research_interval_post not in RESEARCH_INTERVAL_VALUE_SET:
+                messages.error(request, "Research Engine v2.2 supports only 1h and 4h.")
+                return redirect("backtest")
+            if research_days_post not in RESEARCH_LOOKBACK_VALUE_SET:
+                messages.error(request, "Choose a 2-year or 3-year research lookback.")
+                return redirect("backtest")
+
+            try:
+                run_research_backtest(
+                    symbol,
+                    interval=research_interval_post,
+                    days=research_days_post,
+                    split_date=RESEARCH_SPLIT_DATE,
+                )
+                messages.success(
+                    request,
+                    f"Research Engine v{RESEARCH_ENGINE_VERSION} completed {symbol} {research_interval_post} over {research_days_post} days.",
+                )
+            except Exception as exc:
+                messages.error(request, f"Research backtest failed: {exc}")
+
+            return redirect(
+                f"{reverse('backtest')}?research_symbol={symbol}&research_interval={research_interval_post}&research_days={research_days_post}"
+            )
 
         if matrix_symbol:
             try:
@@ -373,6 +578,10 @@ def backtest_view(request):
 
     runs = _latest_backtest_matrix_runs()
     summary = _matrix_summary(runs)
+    research_runs = _latest_research_runs(RESEARCH_DEFAULT_DAYS)
+    research_summary = _research_summary(research_runs)
+    research_detail = _latest_research_detail(research_symbol, research_interval, research_days)
+
     return render(
         request,
         "backtest.html",
@@ -387,6 +596,18 @@ def backtest_view(request):
             "matrix_total": BACKTEST_MATRIX_TOTAL,
             "selected_symbol": selected_symbol,
             "selected_interval": selected_interval,
+            "research_engine_version": RESEARCH_ENGINE_VERSION,
+            "research_split_date": RESEARCH_SPLIT_DATE,
+            "research_default_days": RESEARCH_DEFAULT_DAYS,
+            "research_intervals": RESEARCH_INTERVAL_CHOICES,
+            "research_lookback_choices": RESEARCH_LOOKBACK_CHOICES,
+            "research_matrix_total": RESEARCH_MATRIX_TOTAL,
+            "research_runs": research_runs,
+            "research_summary": research_summary,
+            "research_detail": research_detail,
+            "research_selected_symbol": research_symbol,
+            "research_selected_interval": research_interval,
+            "research_selected_days": research_days,
         },
     )
 
