@@ -41,6 +41,23 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / period, adjust=False).mean()
 
 
+def bars_per_24h(df: pd.DataFrame) -> int:
+    """Infer bars per 24 hours from candle timestamps.
+
+    This keeps rolling 24h liquidity calculations correct on 15m, 30m, 1h,
+    4h and any other regularly spaced timeframe instead of assuming 96 bars.
+    """
+    if len(df) < 2 or "open_time" not in df.columns:
+        return 96
+    diffs = df["open_time"].sort_values().diff().dropna().dt.total_seconds()
+    if diffs.empty:
+        return 96
+    seconds = float(diffs.median())
+    if not np.isfinite(seconds) or seconds <= 0:
+        return 96
+    return max(1, int(round(86_400 / seconds)))
+
+
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["ema20"] = ema(out.close, 20)
@@ -55,8 +72,10 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     out["low20_prev"] = out.low.shift(1).rolling(20).min()
     out["ema50_slope"] = out.ema50.pct_change(5) * 100
     out["return_1"] = out.close.pct_change() * 100
-    # Better backtest proxy for live 24h quote volume on 15m candles.
-    out["quote_volume_24h"] = out.quote_volume.rolling(96, min_periods=24).sum()
+
+    bars = bars_per_24h(out)
+    min_periods = max(2, min(bars, int(round(bars * 0.25))))
+    out["quote_volume_24h"] = out.quote_volume.rolling(bars, min_periods=min_periods).sum()
     return out
 
 

@@ -1,3 +1,5 @@
+from statistics import median
+
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import JsonResponse
@@ -5,11 +7,16 @@ from django.shortcuts import render, redirect
 from django.db.models import Sum
 from django.utils import timezone
 from django.urls import reverse
-from trading.constants import STRATEGY_VERSION, CORE_BASES
+
+from trading.constants import (
+    STRATEGY_VERSION,
+    BACKTEST_ENGINE_VERSION,
+    CORE_BASES,
+)
 from .models import AppConfig, MarketSignal, PaperAccount, Trade, BacktestRun, LiveGate, AuditEvent
 from .forms import AppConfigForm
 from .services.live_gate import evaluate
-from .services.backtest import run_backtest
+from .services.backtest import run_backtest, run_symbol_matrix
 from .services.scanner import scan_market
 from .services.paper import paper_cycle, mark_to_market
 
@@ -21,7 +28,9 @@ BACKTEST_INTERVALS = [
     ("1h", "1 hour"),
     ("4h", "4 hours"),
 ]
-BACKTEST_INTERVAL_VALUES = {value for value, _label in BACKTEST_INTERVALS}
+BACKTEST_INTERVAL_VALUES = [value for value, _label in BACKTEST_INTERVALS]
+BACKTEST_INTERVAL_VALUE_SET = set(BACKTEST_INTERVAL_VALUES)
+BACKTEST_MATRIX_TOTAL = len(BACKTEST_SYMBOLS) * len(BACKTEST_INTERVALS)
 
 
 def _paper_trades():
@@ -46,14 +55,7 @@ def _format_hold_duration(start, end):
 
 
 def _actual_initial_risk_dollars(trade, cfg):
-    """Return the position's planned stop loss in dollars (1R).
-
-    For new trades this value is frozen in metadata at entry. For older
-    Strategy v2 trades created before that field existed, reconstruct it from
-    the immutable trade prices/quantity/entry fee plus the current configured
-    stop slippage. The entry fee rate can be inferred from the trade itself,
-    so the fallback remains stable even if fee settings later change.
-    """
+    """Return the position's planned stop loss in dollars (1R)."""
     metadata = dict(trade.metadata or {})
     frozen = metadata.get("initial_risk_dollars")
     if frozen is not None:
@@ -72,7 +74,11 @@ def _actual_initial_risk_dollars(trade, cfg):
         return 0.0
 
     notional = entry * qty
-    inferred_fee_rate = (entry_fee / notional) if notional > 0 and entry_fee > 0 else (float(cfg.fee_bps) / 10000.0)
+    inferred_fee_rate = (
+        (entry_fee / notional)
+        if notional > 0 and entry_fee > 0
+        else (float(cfg.fee_bps) / 10000.0)
+    )
     fee_rate = float(metadata.get("entry_fee_rate", inferred_fee_rate))
     slippage = float(metadata.get("slippage_rate", float(cfg.slippage_bps) / 10000.0))
     stop_fill = float(metadata.get("expected_stop_fill", stop * (1 - slippage)))
@@ -82,12 +88,6 @@ def _actual_initial_risk_dollars(trade, cfg):
 
 
 def _journal_rows(queryset):
-    """Attach display-only trade journal fields without changing the database schema.
-
-    New Strategy v2 trades persist the BTC regime in Trade.metadata. For older v2
-    trades created before this journal update, recover it from the original
-    MarketSignal referenced by signal_id when that signal is still available.
-    """
     trades = list(queryset)
     cfg = AppConfig.current()
     signal_ids = {
@@ -158,6 +158,86 @@ def current_live_gate(account: PaperAccount):
     return gate
 
 
+def _sample_quality(trades: int) -> str:
+    if trades < 20:
+        return "Very low"
+    if trades < 50:
+        return "Low"
+    if trades < 100:
+        return "Moderate"
+    return "Stronger"
+
+
+def _latest_backtest_matrix_runs():
+    """Return only the latest result for each pair/timeframe under engine 2.1."""
+    qs = BacktestRun.objects.filter(
+        results__strategy_version=STRATEGY_VERSION,
+        results__backtest_engine_version=BACKTEST_ENGINE_VERSION,
+    ).order_by("-started_at")
+
+    seen = set()
+    latest = []
+    for run in qs[:1000]:
+        key = (run.symbol, run.timeframe)
+        if key in seen:
+            continue
+        seen.add(key)
+        run.sample_quality = _sample_quality(run.trades)
+        run.sample_slug = run.sample_quality.lower().replace(" ", "-")
+        run.expectancy_r = float((run.results or {}).get("expectancy_r", 0.0) or 0.0)
+        latest.append(run)
+        if len(latest) >= BACKTEST_MATRIX_TOTAL:
+            break
+
+    interval_order = {value: idx for idx, value in enumerate(BACKTEST_INTERVAL_VALUES)}
+    latest.sort(key=lambda r: (interval_order.get(r.timeframe, 99), r.symbol))
+    return latest
+
+
+def _matrix_summary(runs):
+    positive = [r for r in runs if r.net_return_pct > 0 and r.expectancy_pct > 0 and r.profit_factor > 1]
+    robust = [
+        r for r in runs
+        if r.trades >= 50
+        and r.net_return_pct > 0
+        and r.expectancy_pct > 0
+        and r.profit_factor >= 1.25
+    ]
+
+    by_tf = []
+    for interval, label in BACKTEST_INTERVALS:
+        rows = [r for r in runs if r.timeframe == interval]
+        pfs = [float(r.profit_factor) for r in rows if float(r.profit_factor) < 900]
+        returns = [float(r.net_return_pct) for r in rows]
+        expectancies = [float(r.expectancy_pct) for r in rows]
+        by_tf.append(
+            {
+                "interval": interval,
+                "label": label,
+                "coverage": len(rows),
+                "median_pf": median(pfs) if pfs else None,
+                "median_return": median(returns) if returns else None,
+                "median_expectancy": median(expectancies) if expectancies else None,
+                "positive": sum(1 for r in rows if r.net_return_pct > 0 and r.expectancy_pct > 0 and r.profit_factor > 1),
+                "robust": sum(
+                    1 for r in rows
+                    if r.trades >= 50
+                    and r.net_return_pct > 0
+                    and r.expectancy_pct > 0
+                    and r.profit_factor >= 1.25
+                ),
+            }
+        )
+
+    return {
+        "coverage": len(runs),
+        "total": BACKTEST_MATRIX_TOTAL,
+        "positive": len(positive),
+        "robust": len(robust),
+        "timeframes": by_tf,
+    }
+
+
 @login_required
 def dashboard(request):
     acct = mark_to_market(PaperAccount.primary())
@@ -219,39 +299,92 @@ def backtest_view(request):
 
     if selected_symbol not in BACKTEST_SYMBOLS:
         selected_symbol = "BTCUSDT"
-    if selected_interval not in BACKTEST_INTERVAL_VALUES:
+    if selected_interval not in BACKTEST_INTERVAL_VALUE_SET:
         selected_interval = "15m"
 
     if request.method == "POST":
         symbol = (request.POST.get("symbol") or "BTCUSDT").upper().strip()
         interval = (request.POST.get("interval") or "15m").strip()
+        matrix_symbol = request.POST.get("matrix_symbol") == "1"
+        wants_json = matrix_symbol or request.headers.get("X-Requested-With") == "XMLHttpRequest"
 
         if symbol not in BACKTEST_SYMBOLS:
+            if wants_json:
+                return JsonResponse({"ok": False, "error": "Pair is outside the Strategy v2 core universe."}, status=400)
             messages.error(request, "Choose a pair from the approved Strategy v2 core universe.")
             return redirect("backtest")
-        if interval not in BACKTEST_INTERVAL_VALUES:
+
+        if matrix_symbol:
+            try:
+                runs, errors = run_symbol_matrix(symbol, intervals=BACKTEST_INTERVAL_VALUES)
+                payload = [
+                    {
+                        "symbol": r.symbol,
+                        "interval": r.timeframe,
+                        "trades": r.trades,
+                        "net_return_pct": r.net_return_pct,
+                        "profit_factor": r.profit_factor,
+                        "expectancy_pct": r.expectancy_pct,
+                    }
+                    for r in runs
+                ]
+                return JsonResponse(
+                    {
+                        "ok": bool(runs),
+                        "symbol": symbol,
+                        "completed": len(runs),
+                        "results": payload,
+                        "errors": errors,
+                    },
+                    status=200 if runs else 500,
+                )
+            except Exception as exc:
+                return JsonResponse({"ok": False, "symbol": symbol, "error": str(exc)}, status=500)
+
+        if interval not in BACKTEST_INTERVAL_VALUE_SET:
+            if wants_json:
+                return JsonResponse({"ok": False, "error": "Unsupported backtest timeframe."}, status=400)
             messages.error(request, "Choose a supported backtest timeframe.")
             return redirect("backtest")
 
         try:
-            run_backtest(symbol, interval=interval)
+            run = run_backtest(symbol, interval=interval)
+            if wants_json:
+                return JsonResponse(
+                    {
+                        "ok": True,
+                        "symbol": run.symbol,
+                        "interval": run.timeframe,
+                        "trades": run.trades,
+                        "net_return_pct": run.net_return_pct,
+                        "profit_factor": run.profit_factor,
+                    }
+                )
             messages.success(
                 request,
                 f"Strategy v{STRATEGY_VERSION} backtest complete for {symbol} on {interval}.",
             )
         except Exception as e:
+            if wants_json:
+                return JsonResponse({"ok": False, "error": str(e)}, status=500)
             messages.error(request, f"Backtest failed: {e}")
 
         return redirect(f"{reverse('backtest')}?symbol={symbol}&interval={interval}")
 
+    runs = _latest_backtest_matrix_runs()
+    summary = _matrix_summary(runs)
     return render(
         request,
         "backtest.html",
         {
-            "runs": BacktestRun.objects.all()[:50],
+            "runs": runs,
+            "matrix_summary": summary,
             "strategy_version": STRATEGY_VERSION,
+            "backtest_engine_version": BACKTEST_ENGINE_VERSION,
             "backtest_symbols": BACKTEST_SYMBOLS,
             "backtest_intervals": BACKTEST_INTERVALS,
+            "backtest_interval_values": BACKTEST_INTERVAL_VALUES,
+            "matrix_total": BACKTEST_MATRIX_TOTAL,
             "selected_symbol": selected_symbol,
             "selected_interval": selected_interval,
         },
@@ -260,7 +393,9 @@ def backtest_view(request):
 
 @login_required
 def live_view(request):
-    gate = evaluate() if request.method == "POST" else (LiveGate.objects.filter(requirements__strategy_version=STRATEGY_VERSION).first() or evaluate())
+    gate = evaluate() if request.method == "POST" else (
+        LiveGate.objects.filter(requirements__strategy_version=STRATEGY_VERSION).first() or evaluate()
+    )
     live_trades = Trade.objects.filter(
         mode__in=["testnet", "live"],
         metadata__strategy_version=STRATEGY_VERSION,
@@ -293,7 +428,11 @@ def api_status(request):
             "strategy_version": STRATEGY_VERSION,
             "paper_equity": round(acct.equity, 2),
             "paper_cash": round(acct.cash, 2),
-            "live_gate": bool(gate and gate.eligible and gate.requirements.get("strategy_version") == STRATEGY_VERSION),
+            "live_gate": bool(
+                gate
+                and gate.eligible
+                and gate.requirements.get("strategy_version") == STRATEGY_VERSION
+            ),
             "last_signal_at": sig.observed_at.isoformat() if sig else None,
         }
     )

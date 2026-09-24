@@ -1,12 +1,23 @@
 from __future__ import annotations
 import math
+import os
+import time
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from trading.constants import STRATEGY_VERSION
+
+from trading.constants import STRATEGY_VERSION, BACKTEST_ENGINE_VERSION
 from trading.models import AppConfig, BacktestRun
 from .binance_client import BinanceClient
-from .indicators import candles_to_df, enrich
+from .indicators import candles_to_df, enrich, bars_per_24h
 from .scoring import score_latest, is_actionable_setup, regime_score_from_values
+
+SUPPORTED_MATRIX_INTERVALS = ("15m", "30m", "1h", "4h")
+INTERVAL_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
+RESAMPLE_RULES = {"15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h"}
+CACHE_TTL_SECONDS = 30 * 60
+CACHE_DIR = Path(os.getenv("BINANCE_BACKTEST_CACHE_DIR", "/tmp/binance-insight-backtest-cache"))
 
 
 def _max_drawdown(equity_curve):
@@ -38,13 +49,70 @@ def _attach_btc_regime(asset_df: pd.DataFrame, btc_df: pd.DataFrame) -> pd.DataF
     )
 
 
-def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
-    cfg = AppConfig.current()
-    interval = interval or cfg.scan_interval
-    client = BinanceClient(mode="paper")
+def _cache_path(symbol: str, days: int) -> Path:
+    safe_symbol = "".join(ch for ch in symbol.upper() if ch.isalnum())
+    return CACHE_DIR / f"{safe_symbol}_15m_{int(days)}d.pkl"
 
-    asset_df = enrich(candles_to_df(client.historical_klines(symbol, interval, days=days)))
-    btc_df = enrich(candles_to_df(client.historical_klines("BTCUSDT", interval, days=days)))
+
+def _cached_raw_15m(client: BinanceClient, symbol: str, days: int) -> pd.DataFrame:
+    """Cache 15m historical candles briefly on the Render instance.
+
+    A full matrix repeatedly needs the same 180-day source data. The cache
+    avoids downloading the same history again for each timeframe and, where
+    the web process is reused, for repeat runs during the next 30 minutes.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _cache_path(symbol, days)
+    try:
+        if path.exists() and (time.time() - path.stat().st_mtime) < CACHE_TTL_SECONDS:
+            cached = pd.read_pickle(path)
+            if isinstance(cached, pd.DataFrame) and len(cached) >= 220:
+                return cached
+    except Exception:
+        pass
+
+    rows = client.historical_klines(symbol, "15m", days=days, max_candles=20_000)
+    raw = candles_to_df(rows)
+    try:
+        raw.to_pickle(path)
+    except Exception:
+        pass
+    return raw
+
+
+def _resample_candles(raw: pd.DataFrame, interval: str) -> pd.DataFrame:
+    if interval not in RESAMPLE_RULES:
+        raise ValueError(f"Unsupported matrix timeframe: {interval}")
+    if interval == "15m":
+        return raw.copy()
+
+    src = raw.sort_values("open_time").set_index("open_time")
+    rule = RESAMPLE_RULES[interval]
+    out = src.resample(rule, origin="epoch", label="left", closed="left").agg(
+        {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+            "quote_volume": "sum",
+            "close_time": "max",
+        }
+    )
+    out = out.dropna(subset=["open", "high", "low", "close"]).reset_index()
+    return out
+
+
+def _run_backtest_frames(
+    symbol: str,
+    interval: str,
+    asset_df: pd.DataFrame,
+    btc_df: pd.DataFrame,
+    *,
+    days: int,
+    initial: float,
+    cfg: AppConfig,
+) -> BacktestRun:
     df = _attach_btc_regime(asset_df, btc_df)
     if len(df) < 220:
         raise RuntimeError("Not enough historical candles for a meaningful backtest")
@@ -55,6 +123,9 @@ def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
     pos = None
     fee_rate = cfg.fee_bps / 10000
     slip = cfg.slippage_bps / 10000
+    interval_minutes = INTERVAL_MINUTES.get(interval, 15)
+    max_hold_bars = max(1, int(round((24 * 60) / interval_minutes)))
+    inferred_bars_per_day = bars_per_24h(asset_df)
 
     for i in range(210, len(df) - 1):
         r = df.iloc[i]
@@ -69,7 +140,11 @@ def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
             r.btc_ema200,
             r.btc_rsi14,
         )
-        qv = float(r.quote_volume_24h) if not pd.isna(r.quote_volume_24h) else max(float(r.quote_volume) * 96, 1_000_000)
+        qv = (
+            float(r.quote_volume_24h)
+            if not pd.isna(r.quote_volume_24h)
+            else max(float(r.quote_volume) * inferred_bars_per_day, 1_000_000)
+        )
         spread_bps = 5.0
         scored = score_latest(
             r,
@@ -106,14 +181,14 @@ def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
         if pos is not None:
             exit_px = None
             reason = None
-            # Conservative if both stop and target occur in the same candle: stop first.
+            # Conservative if stop and target are both touched in one candle.
             if float(nxt.low) <= pos["stop"]:
                 exit_px = pos["stop"] * (1 - slip)
                 reason = "stop"
             elif float(nxt.high) >= pos["target"]:
                 exit_px = pos["target"] * (1 - slip)
                 reason = "target"
-            elif i - pos["open_i"] >= 96:
+            elif i - pos["open_i"] >= max_hold_bars:
                 exit_px = float(nxt.close) * (1 - slip)
                 reason = "time"
 
@@ -124,10 +199,18 @@ def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
                 # Entry fee was already removed from balance when position opened.
                 balance += gross - exit_fee
                 pnl = gross - pos["entry_fee"] - exit_fee
+                planned_stop_fill = pos["stop"] * (1 - slip)
+                planned_stop_fee = planned_stop_fill * pos["qty"] * fee_rate
+                initial_risk_dollars = (
+                    (pos["entry"] - planned_stop_fill) * pos["qty"]
+                    + pos["entry_fee"]
+                    + planned_stop_fee
+                )
                 trades.append(
                     {
                         "pnl": pnl,
                         "ret": pnl / (pos["entry"] * pos["qty"]) * 100,
+                        "r": pnl / initial_risk_dollars if initial_risk_dollars > 0 else 0.0,
                         "reason": reason,
                     }
                 )
@@ -147,10 +230,18 @@ def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
         gross = (final_close - pos["entry"]) * pos["qty"]
         balance += gross - exit_fee
         pnl = gross - pos["entry_fee"] - exit_fee
+        planned_stop_fill = pos["stop"] * (1 - slip)
+        planned_stop_fee = planned_stop_fill * pos["qty"] * fee_rate
+        initial_risk_dollars = (
+            (pos["entry"] - planned_stop_fill) * pos["qty"]
+            + pos["entry_fee"]
+            + planned_stop_fee
+        )
         trades.append(
             {
                 "pnl": pnl,
                 "ret": pnl / (pos["entry"] * pos["qty"]) * 100,
+                "r": pnl / initial_risk_dollars if initial_risk_dollars > 0 else 0.0,
                 "reason": "end",
             }
         )
@@ -163,6 +254,8 @@ def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
     profit_factor = gross_profit / gross_loss if gross_loss else (999 if gross_profit else 0)
     rets = [t["ret"] for t in trades]
     expectancy = sum(rets) / len(rets) if rets else 0
+    r_values = [t["r"] for t in trades]
+    expectancy_r = sum(r_values) / len(r_values) if r_values else 0
     sharpe = (
         np.mean(rets) / np.std(rets) * math.sqrt(len(rets))
         if len(rets) > 1 and np.std(rets) > 0
@@ -183,12 +276,78 @@ def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
         sharpe=sharpe,
         results={
             "strategy_version": STRATEGY_VERSION,
+            "backtest_engine_version": BACKTEST_ENGINE_VERSION,
             "trades": trades[-100:],
             "initial": initial,
             "final": balance,
             "btc_regime_aligned": True,
             "fees_bps": cfg.fee_bps,
             "slippage_bps": cfg.slippage_bps,
+            "lookback_days": days,
+            "max_hold_hours": 24,
+            "max_hold_bars": max_hold_bars,
+            "expectancy_r": expectancy_r,
+            "source_interval": "15m",
+            "resampled": interval != "15m",
         },
     )
     return run
+
+
+def run_backtest(symbol="BTCUSDT", interval=None, days=180, initial=10000.0):
+    """Run one Strategy v2 backtest using a consistent 15m source dataset."""
+    cfg = AppConfig.current()
+    interval = interval or cfg.scan_interval
+    if interval not in SUPPORTED_MATRIX_INTERVALS:
+        raise ValueError(f"Unsupported backtest timeframe: {interval}")
+
+    client = BinanceClient(mode="paper")
+    asset_raw = _cached_raw_15m(client, symbol, days)
+    btc_raw = asset_raw.copy() if symbol == "BTCUSDT" else _cached_raw_15m(client, "BTCUSDT", days)
+
+    asset_df = enrich(_resample_candles(asset_raw, interval))
+    btc_df = enrich(_resample_candles(btc_raw, interval))
+    return _run_backtest_frames(
+        symbol,
+        interval,
+        asset_df,
+        btc_df,
+        days=days,
+        initial=initial,
+        cfg=cfg,
+    )
+
+
+def run_symbol_matrix(symbol: str, intervals=SUPPORTED_MATRIX_INTERVALS, days=180, initial=10000.0):
+    """Run all requested timeframes for one symbol from one downloaded dataset.
+
+    The browser matrix runner calls this once per core symbol. That turns a
+    120-combination matrix into 30 sequential HTTP requests rather than 120.
+    """
+    cfg = AppConfig.current()
+    client = BinanceClient(mode="paper")
+    asset_raw = _cached_raw_15m(client, symbol, days)
+    btc_raw = asset_raw.copy() if symbol == "BTCUSDT" else _cached_raw_15m(client, "BTCUSDT", days)
+
+    runs = []
+    errors = []
+    for interval in intervals:
+        if interval not in SUPPORTED_MATRIX_INTERVALS:
+            errors.append({"interval": interval, "error": "unsupported timeframe"})
+            continue
+        try:
+            asset_df = enrich(_resample_candles(asset_raw, interval))
+            btc_df = enrich(_resample_candles(btc_raw, interval))
+            run = _run_backtest_frames(
+                symbol,
+                interval,
+                asset_df,
+                btc_df,
+                days=days,
+                initial=initial,
+                cfg=cfg,
+            )
+            runs.append(run)
+        except Exception as exc:
+            errors.append({"interval": interval, "error": str(exc)})
+    return runs, errors

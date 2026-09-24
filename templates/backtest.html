@@ -1,12 +1,29 @@
 {% extends 'base.html' %}
 {% block heading %}Strategy Backtests{% endblock %}
 {% block content %}
+<style>
+  .bt-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:14px 0 18px}
+  .bt-card{padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025)}
+  .bt-card .label{font-size:.78rem;opacity:.7;text-transform:uppercase;letter-spacing:.04em}
+  .bt-card .value{font-size:1.3rem;font-weight:700;margin-top:4px}
+  .matrix-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
+  .matrix-progress{display:none;margin-top:14px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.02)}
+  .matrix-progress progress{width:100%;height:14px;margin:10px 0}
+  .matrix-log{font-size:.9rem;opacity:.85;min-height:1.4em}
+  .sample{font-size:.78rem;white-space:nowrap}
+  .sample-very-low{opacity:.6}
+  .sample-low{opacity:.75}
+  .sample-moderate{font-weight:600}
+  .sample-stronger{font-weight:700}
+  .small-note{font-size:.86rem;opacity:.7}
+</style>
+
 <div class="toolbar">
   <div>
     <p>Replay the same Strategy v{{ strategy_version }} score and risk logic over Binance candles with configured fees and slippage.</p>
-    <p class="muted">Choose a core USDT pair and timeframe. Each run is stored below so you can compare performance across markets and intervals.</p>
+    <p class="muted">Backtest engine v{{ backtest_engine_version }} normalizes the 24-hour volume window and 24-hour maximum holding period across every timeframe.</p>
   </div>
-  <form method="post" class="inline">
+  <form method="post" class="inline" id="single-backtest-form">
     {% csrf_token %}
     <label>
       <span>Pair</span>
@@ -24,24 +41,66 @@
         {% endfor %}
       </select>
     </label>
-    <button type="submit">Run backtest</button>
+    <button type="submit">Run one backtest</button>
   </form>
 </div>
 
 <section class="panel">
+  <h2>Full matrix</h2>
+  <p>Run all {{ matrix_total }} combinations: {{ backtest_symbols|length }} core pairs × {{ backtest_intervals|length }} timeframes. The browser runs one symbol at a time and stores all four timeframe results before moving to the next symbol.</p>
+  <div class="matrix-actions">
+    <button type="button" id="run-matrix">Run full matrix ({{ matrix_total }})</button>
+    <button type="button" id="stop-matrix" style="display:none">Stop after current pair</button>
+    <span class="small-note">Keep this tab open while the matrix is running.</span>
+  </div>
+  <div class="matrix-progress" id="matrix-progress-box">
+    <strong id="matrix-status">Preparing matrix…</strong>
+    <progress id="matrix-progress" max="{{ matrix_total }}" value="0"></progress>
+    <div class="matrix-log" id="matrix-log"></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Matrix summary</h2>
+  <div class="bt-grid">
+    <div class="bt-card"><div class="label">Coverage</div><div class="value">{{ matrix_summary.coverage }}/{{ matrix_summary.total }}</div></div>
+    <div class="bt-card"><div class="label">Positive combinations</div><div class="value">{{ matrix_summary.positive }}</div></div>
+    <div class="bt-card"><div class="label">Robust candidates</div><div class="value">{{ matrix_summary.robust }}</div></div>
+    <div class="bt-card"><div class="label">Engine</div><div class="value">v{{ backtest_engine_version }}</div></div>
+  </div>
+  <p class="small-note">“Robust candidate” here only means ≥50 trades, positive net return and expectancy, and profit factor ≥1.25 in this historical test. It is not proof of future profitability.</p>
+
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Pair</th>
-          <th>TF</th>
-          <th>Trades</th>
-          <th>Win rate</th>
-          <th>Net return</th>
-          <th>Profit factor</th>
-          <th>Max DD</th>
-          <th>Expectancy</th>
-          <th>Sharpe</th>
+          <th>Timeframe</th><th>Coverage</th><th>Median PF</th><th>Median return</th><th>Median expectancy</th><th>Positive</th><th>Robust</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in matrix_summary.timeframes %}
+          <tr>
+            <td><b>{{ row.interval }}</b></td>
+            <td>{{ row.coverage }}/{{ backtest_symbols|length }}</td>
+            <td>{% if row.median_pf != None %}{{ row.median_pf|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td>{% if row.median_return != None %}{{ row.median_return|floatformat:2 }}%{% else %}—{% endif %}</td>
+            <td>{% if row.median_expectancy != None %}{{ row.median_expectancy|floatformat:2 }}%{% else %}—{% endif %}</td>
+            <td>{{ row.positive }}</td>
+            <td>{{ row.robust }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Latest result for each pair/timeframe</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Pair</th><th>TF</th><th>Trades</th><th>Sample</th><th>Win rate</th><th>Net return</th><th>Profit factor</th><th>Max DD</th><th>Expectancy</th><th>Expectancy R</th><th>Sharpe</th>
         </tr>
       </thead>
       <tbody>
@@ -50,18 +109,121 @@
             <td><b>{{ r.symbol }}</b></td>
             <td>{{ r.timeframe }}</td>
             <td>{{ r.trades }}</td>
+            <td><span class="sample sample-{{ r.sample_slug }}">{{ r.sample_quality }}</span></td>
             <td>{{ r.win_rate_pct|floatformat:1 }}%</td>
             <td>{{ r.net_return_pct|floatformat:2 }}%</td>
             <td>{{ r.profit_factor|floatformat:2 }}</td>
             <td>{{ r.max_drawdown_pct|floatformat:2 }}%</td>
             <td>{{ r.expectancy_pct|floatformat:2 }}%</td>
+            <td>{{ r.expectancy_r|floatformat:2 }}R</td>
             <td>{{ r.sharpe|floatformat:2 }}</td>
           </tr>
         {% empty %}
-          <tr><td colspan="9">No backtests yet.</td></tr>
+          <tr><td colspan="11">No engine v{{ backtest_engine_version }} backtests yet. Run one test or start the full matrix.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </section>
+
+{{ backtest_symbols|json_script:"matrix-symbols" }}
+<script>
+(() => {
+  const runButton = document.getElementById('run-matrix');
+  const stopButton = document.getElementById('stop-matrix');
+  const box = document.getElementById('matrix-progress-box');
+  const progress = document.getElementById('matrix-progress');
+  const status = document.getElementById('matrix-status');
+  const log = document.getElementById('matrix-log');
+  const form = document.getElementById('single-backtest-form');
+  const csrf = form.querySelector('input[name="csrfmiddlewaretoken"]').value;
+  const symbols = JSON.parse(document.getElementById('matrix-symbols').textContent);
+  const intervalsPerSymbol = {{ backtest_intervals|length }};
+  const total = symbols.length * intervalsPerSymbol;
+  let stopRequested = false;
+  let running = false;
+
+  stopButton.addEventListener('click', () => {
+    stopRequested = true;
+    stopButton.disabled = true;
+    stopButton.textContent = 'Stopping after current pair…';
+  });
+
+  runButton.addEventListener('click', async () => {
+    if (running) return;
+    running = true;
+    stopRequested = false;
+    runButton.disabled = true;
+    stopButton.disabled = false;
+    stopButton.textContent = 'Stop after current pair';
+    stopButton.style.display = '';
+    box.style.display = 'block';
+    progress.max = total;
+    progress.value = 0;
+
+    let completed = 0;
+    let failedPairs = 0;
+    let failedIntervals = 0;
+
+    for (let i = 0; i < symbols.length; i++) {
+      if (stopRequested) break;
+      const symbol = symbols[i];
+      status.textContent = `Running ${symbol} — pair ${i + 1}/${symbols.length}`;
+      log.textContent = `${completed}/${total} combinations stored so far.`;
+
+      try {
+        const body = new URLSearchParams();
+        body.set('csrfmiddlewaretoken', csrf);
+        body.set('matrix_symbol', '1');
+        body.set('symbol', symbol);
+
+        const response = await fetch(window.location.pathname, {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRFToken': csrf,
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+          },
+          body: body.toString()
+        });
+
+        let data = {};
+        try { data = await response.json(); } catch (_) {}
+
+        if (!response.ok || !data.ok) {
+          failedPairs += 1;
+          const attempted = data.completed || 0;
+          completed += attempted;
+          failedIntervals += Math.max(0, intervalsPerSymbol - attempted);
+          log.textContent = `${symbol} failed: ${data.error || 'unknown error'}`;
+        } else {
+          completed += data.completed || 0;
+          failedIntervals += (data.errors || []).length;
+          log.textContent = `${symbol}: ${(data.completed || 0)}/${intervalsPerSymbol} timeframes completed.`;
+        }
+      } catch (error) {
+        failedPairs += 1;
+        failedIntervals += intervalsPerSymbol;
+        log.textContent = `${symbol} request failed: ${error}`;
+      }
+
+      progress.value = Math.min(completed + failedIntervals, total);
+    }
+
+    running = false;
+    runButton.disabled = false;
+    stopButton.style.display = 'none';
+
+    if (stopRequested) {
+      status.textContent = `Matrix stopped. ${completed} combinations were stored.`;
+      log.textContent = 'You can run the matrix again later; stored results remain available.';
+      return;
+    }
+
+    status.textContent = `Matrix finished: ${completed} stored, ${failedIntervals} failed.`;
+    log.textContent = failedPairs ? `${failedPairs} pair requests had one or more errors. Reloading results…` : 'All pair requests completed. Reloading results…';
+    setTimeout(() => window.location.reload(), 1200);
+  });
+})();
+</script>
 {% endblock %}
