@@ -1,18 +1,22 @@
-BINANCE INSIGHT V2 — CORRECTED R MULTIPLE
+BINANCE INSIGHT V2 — BACKTEST DROPDOWNS
 
-Replace these three files in your GitHub repository with the complete files in this ZIP:
+Replace these complete files in your repository:
 
-1. trading/services/paper.py
-2. trading/views.py
-3. templates/paper.html
+1. trading/views.py
+2. templates/backtest.html
 
-No database migration is required.
+What this adds:
+- Pair dropdown populated from the Strategy v2 CORE_BASES universe.
+- Timeframe dropdown: 15m, 30m, 1h, 4h.
+- Server-side validation so only approved pair/timeframe choices are run.
+- Selected pair/timeframe remain selected after each run.
+- Backtest history table now shows the latest 50 runs.
+- No database migration required.
+- trading/services/backtest.py does not need replacement because it already accepts interval=.
 
-WHAT CHANGED
-- 1R is now the ACTUAL planned dollar loss if that specific position hits its original stop.
-- It includes entry-to-stop price loss, entry fee, expected stop-exit fee, and configured stop slippage.
-- It no longer uses the maximum position-sizing risk budget as the R denominator.
-- New trades permanently freeze initial_risk_dollars, fee rate, slippage rate and expected stop fill in Trade.metadata.
-- Existing Strategy v2 trades are reconstructed automatically from their recorded entry, stop, quantity and entry fee, so the existing INJUSDT trade should move from about -0.72R to approximately -1.00R.
-
-After upload, Render should redeploy automatically if your service is linked to GitHub. Keep BINANCE_MODE=paper and LIVE_TRADING_ENABLED=false while proving Strategy v2.
+After upload/deploy:
+1. Open /backtest/
+2. Choose a pair.
+3. Choose a timeframe.
+4. Click Run backtest.
+5. Repeat for other pairs/timeframes and compare the stored rows.

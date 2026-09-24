@@ -4,13 +4,24 @@ from django.http import JsonResponse
 from django.shortcuts import render, redirect
 from django.db.models import Sum
 from django.utils import timezone
-from trading.constants import STRATEGY_VERSION
+from django.urls import reverse
+from trading.constants import STRATEGY_VERSION, CORE_BASES
 from .models import AppConfig, MarketSignal, PaperAccount, Trade, BacktestRun, LiveGate, AuditEvent
 from .forms import AppConfigForm
 from .services.live_gate import evaluate
 from .services.backtest import run_backtest
 from .services.scanner import scan_market
 from .services.paper import paper_cycle, mark_to_market
+
+
+BACKTEST_SYMBOLS = [f"{base}USDT" for base in sorted(CORE_BASES)]
+BACKTEST_INTERVALS = [
+    ("15m", "15 minutes"),
+    ("30m", "30 minutes"),
+    ("1h", "1 hour"),
+    ("4h", "4 hours"),
+]
+BACKTEST_INTERVAL_VALUES = {value for value, _label in BACKTEST_INTERVALS}
 
 
 def _paper_trades():
@@ -32,8 +43,6 @@ def _format_hold_duration(start, end):
         return f"{hours}h {minutes}m" if minutes else f"{hours}h"
     days, hours = divmod(hours, 24)
     return f"{days}d {hours}h" if hours else f"{days}d"
-
-
 
 
 def _actual_initial_risk_dollars(trade, cfg):
@@ -205,15 +214,48 @@ def paper_view(request):
 
 @login_required
 def backtest_view(request):
+    selected_symbol = (request.GET.get("symbol") or "BTCUSDT").upper().strip()
+    selected_interval = (request.GET.get("interval") or "15m").strip()
+
+    if selected_symbol not in BACKTEST_SYMBOLS:
+        selected_symbol = "BTCUSDT"
+    if selected_interval not in BACKTEST_INTERVAL_VALUES:
+        selected_interval = "15m"
+
     if request.method == "POST":
         symbol = (request.POST.get("symbol") or "BTCUSDT").upper().strip()
+        interval = (request.POST.get("interval") or "15m").strip()
+
+        if symbol not in BACKTEST_SYMBOLS:
+            messages.error(request, "Choose a pair from the approved Strategy v2 core universe.")
+            return redirect("backtest")
+        if interval not in BACKTEST_INTERVAL_VALUES:
+            messages.error(request, "Choose a supported backtest timeframe.")
+            return redirect("backtest")
+
         try:
-            run_backtest(symbol)
-            messages.success(request, f"Strategy v{STRATEGY_VERSION} backtest complete for {symbol}.")
+            run_backtest(symbol, interval=interval)
+            messages.success(
+                request,
+                f"Strategy v{STRATEGY_VERSION} backtest complete for {symbol} on {interval}.",
+            )
         except Exception as e:
             messages.error(request, f"Backtest failed: {e}")
-        return redirect("backtest")
-    return render(request, "backtest.html", {"runs": BacktestRun.objects.all()[:30], "strategy_version": STRATEGY_VERSION})
+
+        return redirect(f"{reverse('backtest')}?symbol={symbol}&interval={interval}")
+
+    return render(
+        request,
+        "backtest.html",
+        {
+            "runs": BacktestRun.objects.all()[:50],
+            "strategy_version": STRATEGY_VERSION,
+            "backtest_symbols": BACKTEST_SYMBOLS,
+            "backtest_intervals": BACKTEST_INTERVALS,
+            "selected_symbol": selected_symbol,
+            "selected_interval": selected_interval,
+        },
+    )
 
 
 @login_required
