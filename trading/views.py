@@ -17,6 +17,55 @@ def _paper_trades():
     return Trade.objects.filter(mode="paper", metadata__strategy_version=STRATEGY_VERSION)
 
 
+def _format_hold_duration(start, end):
+    if not start:
+        return "—"
+    end = end or timezone.now()
+    seconds = max(int((end - start).total_seconds()), 0)
+    if seconds < 60:
+        return "<1m"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h" if hours else f"{days}d"
+
+
+def _journal_rows(queryset):
+    """Attach display-only trade journal fields without changing the database schema.
+
+    New Strategy v2 trades persist the BTC regime in Trade.metadata. For older v2
+    trades created before this journal update, recover it from the original
+    MarketSignal referenced by signal_id when that signal is still available.
+    """
+    trades = list(queryset)
+    signal_ids = {
+        int((trade.metadata or {}).get("signal_id"))
+        for trade in trades
+        if (trade.metadata or {}).get("signal_id") is not None
+    }
+    signals = MarketSignal.objects.in_bulk(signal_ids) if signal_ids else {}
+
+    for trade in trades:
+        metadata = dict(trade.metadata or {})
+        signal_id = metadata.get("signal_id")
+        signal = signals.get(int(signal_id)) if signal_id is not None else None
+
+        btc_regime = metadata.get("btc_regime_score")
+        if btc_regime is None and signal is not None:
+            btc_regime = signal.regime_score
+        trade.journal_btc_regime = float(btc_regime) if btc_regime is not None else None
+
+        trade.journal_hold = _format_hold_duration(trade.opened_at, trade.closed_at)
+        risk_amount = float(trade.risk_amount or 0.0)
+        trade.journal_r_multiple = (float(trade.pnl) / risk_amount) if trade.status == "closed" and risk_amount > 0 else None
+
+    return trades
+
+
 def latest_per_symbol(limit=12):
     seen = set()
     out = []
@@ -103,8 +152,8 @@ def paper_view(request):
         "paper.html",
         {
             "account": acct,
-            "open_trades": _paper_trades().filter(status="open"),
-            "closed_trades": _paper_trades().filter(status="closed")[:100],
+            "open_trades": _journal_rows(_paper_trades().filter(status="open")),
+            "closed_trades": _journal_rows(_paper_trades().filter(status="closed")[:100]),
             "strategy_version": STRATEGY_VERSION,
         },
     )

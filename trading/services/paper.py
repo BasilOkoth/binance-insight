@@ -135,6 +135,20 @@ def maybe_open_from_signal(signal: MarketSignal):
             "signal_key": signal_key(signal),
             "signal_candle_open_time": (signal.data or {}).get("candle_open_time"),
             "signal_candle_close_time": (signal.data or {}).get("candle_close_time"),
+            # Freeze the decision context at entry so the trade journal remains
+            # auditable even if the underlying MarketSignal is later removed.
+            "btc_regime_score": float(signal.regime_score),
+            "trend_score": float(signal.trend_score),
+            "momentum_score": float(signal.momentum_score),
+            "volume_score": float(signal.volume_score),
+            "breakout_score": float(signal.breakout_score),
+            "volatility_score": float(signal.volatility_score),
+            "liquidity_score": float(signal.liquidity_score),
+            "rsi": float(signal.rsi),
+            "volume_ratio": float(signal.volume_ratio),
+            "spread_bps": float(signal.spread_bps),
+            "signal_rationale": signal.rationale,
+            "signal_warnings": signal.warnings,
             "last_exit_check_ms": now_ms,
         },
     )
