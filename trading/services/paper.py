@@ -112,6 +112,19 @@ def maybe_open_from_signal(signal: MarketSignal):
     actual_target = entry + cfg.target_r_multiple * actual_risk_per_unit
     notional = sizing.quantity * entry
     fee = notional * fee_rate
+
+    # Freeze the ACTUAL planned 1R for this position at entry.
+    # This is deliberately different from sizing.risk_amount, which is the
+    # maximum risk budget the sizing engine was allowed to use. A trade can
+    # use less than that budget when capped by asset/exposure limits.
+    expected_stop_fill = actual_stop * (1 - slippage)
+    expected_stop_exit_fee = sizing.quantity * expected_stop_fill * fee_rate
+    initial_risk_dollars = (
+        (entry - expected_stop_fill) * sizing.quantity
+        + fee
+        + expected_stop_exit_fee
+    )
+
     if notional + fee > acct.cash:
         return None
 
@@ -138,6 +151,14 @@ def maybe_open_from_signal(signal: MarketSignal):
             # Freeze the decision context at entry so the trade journal remains
             # auditable even if the underlying MarketSignal is later removed.
             "btc_regime_score": float(signal.regime_score),
+            # Journal/risk audit fields. Keep these frozen forever so R does
+            # not change later if fee/slippage settings are edited.
+            "initial_risk_dollars": float(initial_risk_dollars),
+            "risk_budget_dollars": float(sizing.risk_amount),
+            "entry_fee_rate": float(fee_rate),
+            "slippage_rate": float(slippage),
+            "expected_stop_fill": float(expected_stop_fill),
+            "expected_stop_exit_fee": float(expected_stop_exit_fee),
             "trend_score": float(signal.trend_score),
             "momentum_score": float(signal.momentum_score),
             "volume_score": float(signal.volume_score),

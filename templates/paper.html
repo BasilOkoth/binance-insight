@@ -55,7 +55,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Closed trades</h2>
-    <span class="muted">Strategy v{{ strategy_version }} · R = net P/L ÷ initial risk</span>
+    <span class="muted">Strategy v{{ strategy_version }} · 1R = planned stop loss including fees + stop slippage</span>
   </div>
   <div class="table-wrap">
     <table>
@@ -89,7 +89,7 @@
           <td>{{ t.exit_reason|default:"—"|title }}</td>
           <td>{{ t.journal_hold }}</td>
           <td>${{ t.pnl|floatformat:2 }}</td>
-          <td>{% if t.journal_r_multiple is not None %}{{ t.journal_r_multiple|floatformat:2 }}R{% else %}—{% endif %}</td>
+          <td>{% if t.journal_r_multiple is not None %}<span title="1R = ${{ t.journal_initial_risk|floatformat:2 }} planned stop loss">{{ t.journal_r_multiple|floatformat:2 }}R</span>{% else %}—{% endif %}</td>
         </tr>
         {% empty %}
         <tr><td colspan="12">No closed trades yet.</td></tr>

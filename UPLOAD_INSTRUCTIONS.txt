@@ -1,27 +1,18 @@
-BINANCE INSIGHT V2 — TRADE JOURNAL FULL REPLACEMENT FILES
+BINANCE INSIGHT V2 — CORRECTED R MULTIPLE
 
-Replace these three files in your repository with the complete files in this package:
+Replace these three files in your GitHub repository with the complete files in this ZIP:
 
 1. trading/services/paper.py
 2. trading/views.py
 3. templates/paper.html
 
-What this adds
---------------
-Closed Paper Trading Lab rows now show:
-Pair | Entry time | Score | BTC regime | Entry | Stop | Target | Exit | Reason | Hold | P/L | R
-
-Open positions also show the entry decision context and holding time.
-
 No database migration is required.
 
-Important behavior
-------------------
-- New trades freeze the BTC regime and the complete signal-factor snapshot in Trade.metadata at entry.
-- Existing Strategy v2 trades (including the already-closed INJUSDT trade) attempt to recover BTC regime from their original MarketSignal using metadata.signal_id. If that original signal no longer exists, BTC regime displays as an em dash rather than inventing a value.
-- R is calculated as net P/L divided by the initial risk_amount stored on the trade.
-- Hold is calculated from opened_at to closed_at, or from opened_at to the current time for an open position.
+WHAT CHANGED
+- 1R is now the ACTUAL planned dollar loss if that specific position hits its original stop.
+- It includes entry-to-stop price loss, entry fee, expected stop-exit fee, and configured stop slippage.
+- It no longer uses the maximum position-sizing risk budget as the R denominator.
+- New trades permanently freeze initial_risk_dollars, fee rate, slippage rate and expected stop fill in Trade.metadata.
+- Existing Strategy v2 trades are reconstructed automatically from their recorded entry, stop, quantity and entry fee, so the existing INJUSDT trade should move from about -0.72R to approximately -1.00R.
 
-After upload
-------------
-Render should redeploy automatically if GitHub auto-deploy is enabled. No migration command is necessary for this UI/journal update.
+After upload, Render should redeploy automatically if your service is linked to GitHub. Keep BINANCE_MODE=paper and LIVE_TRADING_ENABLED=false while proving Strategy v2.

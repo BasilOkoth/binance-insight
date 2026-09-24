@@ -34,6 +34,44 @@ def _format_hold_duration(start, end):
     return f"{days}d {hours}h" if hours else f"{days}d"
 
 
+
+
+def _actual_initial_risk_dollars(trade, cfg):
+    """Return the position's planned stop loss in dollars (1R).
+
+    For new trades this value is frozen in metadata at entry. For older
+    Strategy v2 trades created before that field existed, reconstruct it from
+    the immutable trade prices/quantity/entry fee plus the current configured
+    stop slippage. The entry fee rate can be inferred from the trade itself,
+    so the fallback remains stable even if fee settings later change.
+    """
+    metadata = dict(trade.metadata or {})
+    frozen = metadata.get("initial_risk_dollars")
+    if frozen is not None:
+        try:
+            frozen = float(frozen)
+            if frozen > 0:
+                return frozen
+        except (TypeError, ValueError):
+            pass
+
+    entry = float(trade.entry_price or 0.0)
+    stop = float(trade.stop_price or 0.0)
+    qty = float(trade.quantity or 0.0)
+    entry_fee = float(trade.entry_fee or 0.0)
+    if entry <= 0 or stop <= 0 or qty <= 0 or stop >= entry:
+        return 0.0
+
+    notional = entry * qty
+    inferred_fee_rate = (entry_fee / notional) if notional > 0 and entry_fee > 0 else (float(cfg.fee_bps) / 10000.0)
+    fee_rate = float(metadata.get("entry_fee_rate", inferred_fee_rate))
+    slippage = float(metadata.get("slippage_rate", float(cfg.slippage_bps) / 10000.0))
+    stop_fill = float(metadata.get("expected_stop_fill", stop * (1 - slippage)))
+    stop_exit_fee = float(metadata.get("expected_stop_exit_fee", stop_fill * qty * fee_rate))
+
+    return max((entry - stop_fill) * qty + entry_fee + stop_exit_fee, 0.0)
+
+
 def _journal_rows(queryset):
     """Attach display-only trade journal fields without changing the database schema.
 
@@ -42,6 +80,7 @@ def _journal_rows(queryset):
     MarketSignal referenced by signal_id when that signal is still available.
     """
     trades = list(queryset)
+    cfg = AppConfig.current()
     signal_ids = {
         int((trade.metadata or {}).get("signal_id"))
         for trade in trades
@@ -60,8 +99,13 @@ def _journal_rows(queryset):
         trade.journal_btc_regime = float(btc_regime) if btc_regime is not None else None
 
         trade.journal_hold = _format_hold_duration(trade.opened_at, trade.closed_at)
-        risk_amount = float(trade.risk_amount or 0.0)
-        trade.journal_r_multiple = (float(trade.pnl) / risk_amount) if trade.status == "closed" and risk_amount > 0 else None
+        initial_risk = _actual_initial_risk_dollars(trade, cfg)
+        trade.journal_initial_risk = initial_risk if initial_risk > 0 else None
+        trade.journal_r_multiple = (
+            float(trade.pnl) / initial_risk
+            if trade.status == "closed" and trade.pnl is not None and initial_risk > 0
+            else None
+        )
 
     return trades
 
