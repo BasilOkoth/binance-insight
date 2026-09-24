@@ -1,11 +1,74 @@
 {% extends 'base.html' %}
 {% load tz %}
-{% block heading %}Paper Trading Lab{% endblock %}
+{% block heading %}Paper Trading Lab
+<section class="panel" style="margin-top:24px">
+  <div class="panel-head">
+    <div>
+      <h2>Candidate {{ candidate_version }} paper experiment</h2>
+      <p class="muted">{{ candidate_symbols_label }} · {{ candidate_interval }} · score ≥ {{ candidate_threshold|floatformat:0 }} · 24h maximum hold. This account does not count toward the Strategy v{{ strategy_version }} live gate.</p>
+    </div>
+    <form method="post">{% csrf_token %}<button name="paper_action" value="candidate">Run candidate cycle</button></form>
+  </div>
+</section>
+
+<div class="grid4">
+  <div class="card"><span>Candidate equity</span><b>${{ candidate_account.equity|floatformat:2 }}</b></div>
+  <div class="card"><span>Candidate cash</span><b>${{ candidate_account.cash|floatformat:2 }}</b></div>
+  <div class="card"><span>Candidate peak</span><b>${{ candidate_account.peak_equity|floatformat:2 }}</b></div>
+  <div class="card"><span>Candidate max DD</span><b>{{ candidate_account.max_drawdown_pct|floatformat:2 }}%</b></div>
+</div>
+
+<section class="panel">
+  <h2>Candidate open positions</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>Entry time</th><th>Score</th><th>BTC regime</th><th>Entry</th><th>Qty</th><th>Stop</th><th>Target</th><th>Hold</th></tr></thead>
+      <tbody>
+        {% for t in candidate_open_trades %}
+        <tr>
+          <td><b>{{ t.symbol }}</b></td><td>{{ t.opened_at|localtime|date:"M j, H:i" }}</td><td><span class="score">{{ t.signal_score|floatformat:0 }}</span></td>
+          <td>{% if t.journal_btc_regime is not None %}{{ t.journal_btc_regime|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td>{{ t.entry_price|floatformat:7 }}</td><td>{{ t.quantity|floatformat:6 }}</td><td>{{ t.stop_price|floatformat:7 }}</td><td>{{ t.target_price|floatformat:7 }}</td><td>{{ t.journal_hold }}</td>
+        </tr>
+        {% empty %}<tr><td colspan="9">No candidate positions.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Candidate closed trades</h2><span class="muted">1R = planned stop loss including fees + stop slippage</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>Entry time</th><th>Score</th><th>BTC regime</th><th>Entry</th><th>Stop</th><th>Target</th><th>Exit</th><th>Reason</th><th>Hold</th><th>P/L</th><th>R</th></tr></thead>
+      <tbody>
+        {% for t in candidate_closed_trades %}
+        <tr>
+          <td><b>{{ t.symbol }}</b></td><td>{{ t.opened_at|localtime|date:"M j, H:i" }}</td><td><span class="score">{{ t.signal_score|floatformat:0 }}</span></td>
+          <td>{% if t.journal_btc_regime is not None %}{{ t.journal_btc_regime|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td>{{ t.entry_price|floatformat:7 }}</td><td>{{ t.stop_price|floatformat:7 }}</td><td>{{ t.target_price|floatformat:7 }}</td>
+          <td>{% if t.exit_price is not None %}{{ t.exit_price|floatformat:7 }}{% else %}—{% endif %}</td><td>{{ t.exit_reason|default:"—"|title }}</td><td>{{ t.journal_hold }}</td><td>${{ t.pnl|floatformat:2 }}</td>
+          <td>{% if t.journal_r_multiple is not None %}<span title="1R = ${{ t.journal_initial_risk|floatformat:2 }} planned stop loss">{{ t.journal_r_multiple|floatformat:2 }}R</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}<tr><td colspan="12">No candidate closed trades yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
 {% block content %}
 <div class="toolbar">
-  <p>Real Binance market data, simulated fills, fees, slippage, position sizing, stops and targets. This is the mandatory proving ground before live execution.</p>
-  <form method="post">{% csrf_token %}<button>Run paper cycle</button></form>
+  <div>
+    <p>Real Binance market data, simulated fills, fees, slippage, position sizing, stops and targets.</p>
+    <p class="muted">The Strategy v{{ strategy_version }} control and Candidate {{ candidate_version }} experiment are kept in separate $10,000 paper accounts.</p>
+  </div>
+  <form method="post">{% csrf_token %}<button name="paper_action" value="control">Run V2 control cycle</button></form>
 </div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Strategy v{{ strategy_version }} control</h2><span class="muted">Existing 15m experiment · unchanged</span></div>
+</section>
 
 <div class="grid4">
   <div class="card"><span>Equity</span><b>${{ account.equity|floatformat:2 }}</b></div>
@@ -98,4 +161,60 @@
     </table>
   </div>
 </section>
+
+<section class="panel" style="margin-top:24px">
+  <div class="panel-head">
+    <div>
+      <h2>Candidate {{ candidate_version }} paper experiment</h2>
+      <p class="muted">{{ candidate_symbols_label }} · {{ candidate_interval }} · score ≥ {{ candidate_threshold|floatformat:0 }} · 24h maximum hold. This account does not count toward the Strategy v{{ strategy_version }} live gate.</p>
+    </div>
+    <form method="post">{% csrf_token %}<button name="paper_action" value="candidate">Run candidate cycle</button></form>
+  </div>
+</section>
+
+<div class="grid4">
+  <div class="card"><span>Candidate equity</span><b>${{ candidate_account.equity|floatformat:2 }}</b></div>
+  <div class="card"><span>Candidate cash</span><b>${{ candidate_account.cash|floatformat:2 }}</b></div>
+  <div class="card"><span>Candidate peak</span><b>${{ candidate_account.peak_equity|floatformat:2 }}</b></div>
+  <div class="card"><span>Candidate max DD</span><b>{{ candidate_account.max_drawdown_pct|floatformat:2 }}%</b></div>
+</div>
+
+<section class="panel">
+  <h2>Candidate open positions</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>Entry time</th><th>Score</th><th>BTC regime</th><th>Entry</th><th>Qty</th><th>Stop</th><th>Target</th><th>Hold</th></tr></thead>
+      <tbody>
+        {% for t in candidate_open_trades %}
+        <tr>
+          <td><b>{{ t.symbol }}</b></td><td>{{ t.opened_at|localtime|date:"M j, H:i" }}</td><td><span class="score">{{ t.signal_score|floatformat:0 }}</span></td>
+          <td>{% if t.journal_btc_regime is not None %}{{ t.journal_btc_regime|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td>{{ t.entry_price|floatformat:7 }}</td><td>{{ t.quantity|floatformat:6 }}</td><td>{{ t.stop_price|floatformat:7 }}</td><td>{{ t.target_price|floatformat:7 }}</td><td>{{ t.journal_hold }}</td>
+        </tr>
+        {% empty %}<tr><td colspan="9">No candidate positions.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Candidate closed trades</h2><span class="muted">1R = planned stop loss including fees + stop slippage</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>Entry time</th><th>Score</th><th>BTC regime</th><th>Entry</th><th>Stop</th><th>Target</th><th>Exit</th><th>Reason</th><th>Hold</th><th>P/L</th><th>R</th></tr></thead>
+      <tbody>
+        {% for t in candidate_closed_trades %}
+        <tr>
+          <td><b>{{ t.symbol }}</b></td><td>{{ t.opened_at|localtime|date:"M j, H:i" }}</td><td><span class="score">{{ t.signal_score|floatformat:0 }}</span></td>
+          <td>{% if t.journal_btc_regime is not None %}{{ t.journal_btc_regime|floatformat:0 }}{% else %}—{% endif %}</td>
+          <td>{{ t.entry_price|floatformat:7 }}</td><td>{{ t.stop_price|floatformat:7 }}</td><td>{{ t.target_price|floatformat:7 }}</td>
+          <td>{% if t.exit_price is not None %}{{ t.exit_price|floatformat:7 }}{% else %}—{% endif %}</td><td>{{ t.exit_reason|default:"—"|title }}</td><td>{{ t.journal_hold }}</td><td>${{ t.pnl|floatformat:2 }}</td>
+          <td>{% if t.journal_r_multiple is not None %}<span title="1R = ${{ t.journal_initial_risk|floatformat:2 }} planned stop loss">{{ t.journal_r_multiple|floatformat:2 }}R</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}<tr><td colspan="12">No candidate closed trades yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
 {% endblock %}

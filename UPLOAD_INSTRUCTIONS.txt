@@ -1,60 +1,48 @@
-BINANCE INSIGHT — RESEARCH ENGINE v2.2
-FULL REPLACEMENT FILES
+BINANCE INSIGHT — CANDIDATE VALIDATION + PARALLEL PAPER EXPERIMENT v2.3
 
-This package does NOT patch your repository automatically.
-Upload the complete files below and replace the existing files with the same paths:
+This package contains COMPLETE files, not patches.
 
+REPLACE these existing files in GitHub:
 1. trading/constants.py
-2. trading/services/backtest.py
-3. trading/views.py
-4. templates/backtest.html
+2. trading/views.py
+3. trading/services/backtest.py
+4. trading/services/paper.py
+5. templates/backtest.html
+6. templates/paper.html
+7. trading/management/commands/market_worker.py
 
-NO DATABASE MIGRATION IS REQUIRED.
-Research results are stored inside the existing BacktestRun.results JSON field.
+ADD these NEW complete files:
+8. trading/services/candidate_validation.py
+9. trading/services/candidate_paper.py
 
-WHAT THIS ADDS
---------------
-- Research Engine v2.2 kept separate from Strategy v2.0 paper/live execution.
-- 2-year and 3-year deep research runs.
-- 1h source data; 4h is built only from complete groups of four 1h candles.
-- Fixed January 1, 2026 validation/OOS split.
-- Pre-2026 vs 2026+ performance metrics.
-- Score-band diagnostics: 72–74, 75–79, 80–84, 85–89, 90+.
-- 90-day fixed-rule walk-forward stability windows.
-- Mark-to-market period returns and drawdowns.
-- Research-candidate flag with explicit criteria.
-- Full 60-study research matrix: 30 core pairs × 1h/4h.
-- Existing 180-day Backtest Engine v2.1 remains available under the collapsed Quick Matrix section.
+No database migration is required.
 
-RESEARCH CANDIDATE CRITERIA
----------------------------
-A result is only flagged as a research candidate when ALL are true:
-- at least 20 out-of-sample trades;
-- out-of-sample net return > 0;
-- out-of-sample profit factor >= 1.25;
-- out-of-sample expectancy R > 0;
-- at least two evaluable 90-day windows;
-- at least 60% of evaluable windows are positive.
+WHAT IT ADDS
+- Candidate Validation Lab v2.3 for the four research candidates:
+  * INJUSDT 1h
+  * ATOMUSDT 1h
+  * ATOMUSDT 4h
+  * TRXUSDT 4h
+- Threshold grid: 72, 75, 78, 80, 82, 85.
+- Threshold 80 is explicitly marked as the forward-paper hypothesis, not retrospectively selected by the grid.
+- Each threshold is fully replayed; lower-score trades are not merely filtered after the fact.
+- Separate Candidate paper account starting from the configured paper starting cash (normally $10,000).
+- Candidate paper universe: INJUSDT + ATOMUSDT, 1h, score >= 80.
+- Candidate paper trades use the same fees, slippage, stop/target and risk sizing as the control, plus a 24-hour maximum hold to mirror the research engine.
+- Candidate trades are tagged strategy_version="2.3-candidate", so they DO NOT enter the Strategy v2.0 live-gate statistics.
+- The normal Strategy v2.0 paper account remains unchanged as the control.
+- market_worker runs both the normal control cycle and the candidate cycle every worker interval.
 
-This is a research label only. It is not a live-trading gate and does not imply future profitability.
-
-DEPLOY
-------
-1. Replace the four files above in GitHub.
-2. Commit to main.
-3. Let Render redeploy.
-4. Open Backtests.
-5. First test one pair, for example INJUSDT / 1h / 3 years.
-6. Confirm the deep-research tables appear.
-7. Then click "Run research matrix (60)" and keep that browser tab open.
-
-The first three-year request can take longer because it downloads and caches multi-year 1h history. Subsequent studies reuse the BTC cache and per-symbol cache when the same Render process remains alive.
+AFTER DEPLOYMENT
+1. Open Backtests.
+2. Scroll to “Candidate Validation v2.3”.
+3. Click “Run all candidate validations (4)”.
+4. Keep the tab open until all four are stored.
+5. Open Paper Trading.
+6. You will see the original Strategy v2.0 control account and a separate Candidate v2.3 account.
+7. The Render market worker will automatically evaluate both experiments after the new market_worker.py is deployed/restarted.
 
 IMPORTANT
----------
-- Paper/live Strategy version stays 2.0.
-- Backtest Engine stays 2.1 for the existing short matrix.
-- Research Engine is 2.2.
-- No paper account is reset.
-- No live settings are changed.
-- No API-secret/private-key handling is added.
+- This does NOT enable live trading.
+- This does NOT loosen the existing live gate.
+- Candidate results are an experiment. The 2026 data has already informed the hypothesis, so future unseen paper trades are the stronger validation.

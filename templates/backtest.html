@@ -237,6 +237,81 @@
   </div>
 </section>
 
+
+<section class="panel research-hero">
+  <div>
+    <p class="eyebrow">CANDIDATE VALIDATION v{{ candidate_validation_version }}</p>
+    <h2>Threshold stability lab</h2>
+    <p>Validate the four research candidates without changing Strategy v{{ strategy_version }}. Each study replays the same three-year history at thresholds 72, 75, 78, 80, 82 and 85.</p>
+    <p class="small-note"><b>Score 80 is marked as the forward-test hypothesis because it was chosen before this grid.</b> Results at other thresholds are exploratory. A smooth improvement across nearby thresholds is more credible than one isolated “magic” threshold.</p>
+  </div>
+  <div class="matrix-actions">
+    <button type="button" id="run-candidate-validations">Run all candidate validations ({{ candidate_validation_total }})</button>
+    <button type="button" id="stop-candidate-validations" style="display:none">Stop after current candidate</button>
+  </div>
+  <div class="matrix-progress" id="candidate-progress-box">
+    <strong id="candidate-status">Preparing candidate validation…</strong>
+    <progress id="candidate-progress" max="{{ candidate_validation_total }}" value="0"></progress>
+    <div class="matrix-log" id="candidate-log"></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Candidate validation summary</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Candidate</th><th>Forward threshold</th><th>OOS trades</th><th>OOS PF</th><th>OOS return</th><th>OOS Exp R</th><th>Positive windows</th><th>Internal checks</th><th>Action</th></tr></thead>
+      <tbody>
+        {% for r in candidate_validation_runs %}
+        <tr>
+          <td><a href="{% url 'backtest' %}?candidate_symbol={{ r.symbol }}&candidate_interval={{ r.timeframe }}"><b>{{ r.symbol }} · {{ r.timeframe }}</b></a></td>
+          <td>{{ r.cv_threshold|floatformat:0 }}+</td><td>{{ r.cv_oos_trades }}</td><td>{{ r.cv_oos_pf|floatformat:2 }}</td><td>{{ r.cv_oos_return|floatformat:2 }}%</td><td>{{ r.cv_oos_expectancy_r|floatformat:2 }}R</td><td>{{ r.cv_positive_windows|floatformat:0 }}%</td>
+          <td>{% if r.cv_passes %}<b>Pass</b>{% else %}No{% endif %}</td>
+          <td>
+            <form method="post" style="display:inline">{% csrf_token %}<input type="hidden" name="candidate_validation_one" value="1"><input type="hidden" name="symbol" value="{{ r.symbol }}"><input type="hidden" name="candidate_interval" value="{{ r.timeframe }}"><button type="submit">Rerun</button></form>
+          </td>
+        </tr>
+        {% empty %}
+          {% for c in candidate_validation_choices %}
+          <tr><td><b>{{ c.label }}</b></td><td>{{ candidate_forward_threshold|floatformat:0 }}+</td><td colspan="6">Not run yet.</td><td><form method="post" style="display:inline">{% csrf_token %}<input type="hidden" name="candidate_validation_one" value="1"><input type="hidden" name="symbol" value="{{ c.symbol }}"><input type="hidden" name="candidate_interval" value="{{ c.interval }}"><button type="submit">Run</button></form></td></tr>
+          {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% if candidate_validation_detail %}
+<section class="panel">
+  <h2>{{ candidate_validation_detail.symbol }} {{ candidate_validation_detail.timeframe }} — threshold grid</h2>
+  <p class="small-note">The highlighted 80+ row is the pre-declared forward-paper hypothesis. “Internal checks” use the same minimum OOS/stability gates as the research lab; they are not proof of future profitability.</p>
+  <div class="bt-grid">
+    <div class="bt-card"><div class="label">Forward threshold</div><div class="value">{{ candidate_validation_detail.cv_threshold|floatformat:0 }}+</div></div>
+    <div class="bt-card"><div class="label">OOS PF @ 80+</div><div class="value">{{ candidate_validation_detail.cv_oos_pf|floatformat:2 }}</div></div>
+    <div class="bt-card"><div class="label">OOS Exp R @ 80+</div><div class="value">{{ candidate_validation_detail.cv_oos_expectancy_r|floatformat:2 }}R</div></div>
+    <div class="bt-card"><div class="label">Non-decreasing Exp R steps</div><div class="value">{{ candidate_validation_detail.cv_smoothness|floatformat:0 }}%</div><div class="sub">Exploratory smoothness check</div></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Threshold</th><th>Pre-2026 trades</th><th>Pre PF</th><th>Pre Exp R</th><th>OOS trades</th><th>OOS PF</th><th>OOS return</th><th>OOS Exp R</th><th>Positive windows</th><th>Checks</th></tr></thead>
+      <tbody>
+        {% for row in candidate_validation_detail.cv_rows %}
+        <tr {% if row.forward_hypothesis %}style="font-weight:700"{% endif %}>
+          <td>{% if row.forward_hypothesis %}★ {% endif %}{{ row.threshold|floatformat:0 }}+</td>
+          <td>{{ row.train.trades }}</td><td>{{ row.train.profit_factor|floatformat:2 }}</td><td>{{ row.train.expectancy_r|floatformat:2 }}R</td>
+          <td>{{ row.oos.trades }}</td><td>{{ row.oos.profit_factor|floatformat:2 }}</td><td>{{ row.oos.net_return_pct|floatformat:2 }}%</td><td>{{ row.oos.expectancy_r|floatformat:2 }}R</td>
+          <td>{{ row.walk_forward.positive_window_pct|floatformat:0 }}%</td><td>{% if row.passes_internal_checks %}<b>Pass</b>{% else %}No{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="small-note">{{ candidate_validation_detail.cv_note }}</p>
+</section>
+{% else %}
+<section class="panel"><h2>Candidate threshold detail</h2><p>No validation result yet for {{ candidate_selected_symbol }} {{ candidate_selected_interval }}. Run that candidate or use “Run all candidate validations”.</p></section>
+{% endif %}
+
 <details class="panel panel-summary">
   <summary>Quick 180-day matrix — Backtest Engine v{{ backtest_engine_version }}</summary>
   <div class="toolbar" style="margin-top:16px">
@@ -279,6 +354,7 @@
   </div>
 </details>
 
+{{ candidate_validation_choices|json_script:"candidate-validation-choices" }}
 {{ backtest_symbols|json_script:"research-matrix-symbols" }}
 {{ backtest_symbols|json_script:"quick-matrix-symbols" }}
 <script>
@@ -361,6 +437,66 @@
     researchStatus.textContent = `Research matrix finished: ${completed} stored, ${failed} failed.`;
     researchLog.textContent = 'Reloading research results…';
     setTimeout(() => window.location.reload(), 1200);
+  });
+
+
+  const candidateRun = document.getElementById('run-candidate-validations');
+  const candidateStop = document.getElementById('stop-candidate-validations');
+  const candidateBox = document.getElementById('candidate-progress-box');
+  const candidateProgress = document.getElementById('candidate-progress');
+  const candidateStatus = document.getElementById('candidate-status');
+  const candidateLog = document.getElementById('candidate-log');
+  const candidateChoices = JSON.parse(document.getElementById('candidate-validation-choices').textContent);
+  let candidateStopRequested = false;
+  let candidateRunning = false;
+
+  candidateStop.addEventListener('click', () => {
+    candidateStopRequested = true;
+    candidateStop.disabled = true;
+    candidateStop.textContent = 'Stopping after current candidate…';
+  });
+
+  candidateRun.addEventListener('click', async () => {
+    if (candidateRunning) return;
+    candidateRunning = true;
+    candidateStopRequested = false;
+    candidateRun.disabled = true;
+    candidateStop.disabled = false;
+    candidateStop.textContent = 'Stop after current candidate';
+    candidateStop.style.display = '';
+    candidateBox.style.display = 'block';
+    candidateProgress.max = candidateChoices.length;
+    candidateProgress.value = 0;
+    let completed = 0, failed = 0;
+
+    for (let i = 0; i < candidateChoices.length; i++) {
+      if (candidateStopRequested) break;
+      const item = candidateChoices[i];
+      candidateStatus.textContent = `Validating ${item.symbol} ${item.interval} — ${i + 1}/${candidateChoices.length}`;
+      candidateLog.textContent = 'Replaying thresholds 72, 75, 78, 80, 82 and 85…';
+      try {
+        const body = new URLSearchParams();
+        body.set('csrfmiddlewaretoken', csrf);
+        body.set('candidate_validation_one', '1');
+        body.set('symbol', item.symbol);
+        body.set('candidate_interval', item.interval);
+        const response = await fetch(window.location.pathname, {
+          method:'POST',
+          headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':csrf,'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+          body:body.toString()
+        });
+        let data={}; try{data=await response.json();}catch(_){}
+        if(!response.ok||!data.ok){failed++;candidateLog.textContent=`${item.symbol} ${item.interval} failed: ${data.error||'unknown error'}`;}
+        else{completed++;candidateLog.textContent=`${item.symbol} ${item.interval}: threshold 80 OOS PF ${(data.oos_pf||0).toFixed(2)}, Exp R ${(data.oos_expectancy_r||0).toFixed(2)}R.`;}
+      } catch(error){failed++;candidateLog.textContent=`${item.symbol} ${item.interval} request failed: ${error}`;}
+      candidateProgress.value = completed + failed;
+    }
+
+    candidateRunning=false;candidateRun.disabled=false;candidateStop.style.display='none';
+    if(candidateStopRequested){candidateStatus.textContent=`Candidate validation stopped. ${completed} stored.`;return;}
+    candidateStatus.textContent=`Candidate validation finished: ${completed} stored, ${failed} failed.`;
+    candidateLog.textContent='Reloading validation results…';
+    setTimeout(()=>window.location.reload(),1200);
   });
 
   const quickRun = document.getElementById('run-matrix');

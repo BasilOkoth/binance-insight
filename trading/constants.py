@@ -22,3 +22,23 @@ CORE_BASES = {
     "ETC", "ATOM", "HBAR", "ICP", "FIL", "APT", "ARB", "OP", "XLM",
     "INJ", "SEI", "RENDER",
 }
+
+# Candidate Validation Lab v2.3
+CANDIDATE_VALIDATION_ENGINE_VERSION = "2.3"
+CANDIDATE_THRESHOLD_GRID = (72.0, 75.0, 78.0, 80.0, 82.0, 85.0)
+# 80 is the forward-test hypothesis identified before running this threshold grid.
+CANDIDATE_FORWARD_THRESHOLD = 80.0
+CANDIDATE_VALIDATION_SET = (
+    ("INJUSDT", "1h"),
+    ("ATOMUSDT", "1h"),
+    ("ATOMUSDT", "4h"),
+    ("TRXUSDT", "4h"),
+)
+
+# Separate paper experiment: never counted in Strategy v2.0 live-gate statistics.
+CANDIDATE_PAPER_VERSION = "2.3-candidate"
+CANDIDATE_PAPER_ACCOUNT_NAME = "candidate-v23"
+CANDIDATE_PAPER_THRESHOLD = 80.0
+CANDIDATE_PAPER_SYMBOLS = ("INJUSDT", "ATOMUSDT")
+CANDIDATE_PAPER_INTERVAL = "1h"
+CANDIDATE_PAPER_MAX_HOLD_HOURS = 24

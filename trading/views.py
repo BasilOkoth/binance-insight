@@ -15,6 +15,13 @@ from trading.constants import (
     RESEARCH_DEFAULT_DAYS,
     RESEARCH_SPLIT_DATE,
     RESEARCH_INTERVALS,
+    CANDIDATE_VALIDATION_ENGINE_VERSION,
+    CANDIDATE_FORWARD_THRESHOLD,
+    CANDIDATE_VALIDATION_SET,
+    CANDIDATE_PAPER_VERSION,
+    CANDIDATE_PAPER_THRESHOLD,
+    CANDIDATE_PAPER_SYMBOLS,
+    CANDIDATE_PAPER_INTERVAL,
     CORE_BASES,
 )
 from .models import AppConfig, MarketSignal, PaperAccount, Trade, BacktestRun, LiveGate, AuditEvent
@@ -28,6 +35,13 @@ from .services.backtest import (
 )
 from .services.scanner import scan_market
 from .services.paper import paper_cycle, mark_to_market
+from .services.candidate_validation import run_candidate_validation, allowed_candidate
+from .services.candidate_paper import (
+    candidate_cycle,
+    candidate_account,
+    candidate_trades,
+    mark_candidate_to_market,
+)
 
 
 BACKTEST_SYMBOLS = [f"{base}USDT" for base in sorted(CORE_BASES)]
@@ -46,6 +60,12 @@ RESEARCH_INTERVAL_VALUE_SET = set(RESEARCH_INTERVALS)
 RESEARCH_LOOKBACK_CHOICES = [(730, "2 years"), (1095, "3 years")]
 RESEARCH_LOOKBACK_VALUE_SET = {value for value, _label in RESEARCH_LOOKBACK_CHOICES}
 RESEARCH_MATRIX_TOTAL = len(BACKTEST_SYMBOLS) * len(RESEARCH_INTERVAL_CHOICES)
+
+CANDIDATE_VALIDATION_CHOICES = [
+    {"symbol": symbol, "interval": interval, "label": f"{symbol} · {interval}"}
+    for symbol, interval in CANDIDATE_VALIDATION_SET
+]
+CANDIDATE_VALIDATION_TOTAL = len(CANDIDATE_VALIDATION_CHOICES)
 
 
 def _paper_trades():
@@ -355,6 +375,57 @@ def _latest_research_detail(symbol, interval, days):
     return _decorate_research_run(run) if run else None
 
 
+
+def _decorate_candidate_validation(run):
+    data = dict(run.results or {})
+    run.cv_rows = data.get("threshold_grid") or []
+    run.cv_selected = data.get("selected_threshold_result") or {}
+    run.cv_threshold = float(data.get("selected_forward_threshold") or CANDIDATE_FORWARD_THRESHOLD)
+    run.cv_smoothness = float(data.get("oos_expectancy_non_decreasing_steps_pct") or 0.0)
+    run.cv_note = data.get("note") or ""
+    selected_oos = run.cv_selected.get("oos") or {}
+    selected_walk = run.cv_selected.get("walk_forward") or {}
+    run.cv_oos_trades = int(selected_oos.get("trades") or 0)
+    run.cv_oos_pf = float(selected_oos.get("profit_factor") or 0.0)
+    run.cv_oos_return = float(selected_oos.get("net_return_pct") or 0.0)
+    run.cv_oos_expectancy_r = float(selected_oos.get("expectancy_r") or 0.0)
+    run.cv_positive_windows = float(selected_walk.get("positive_window_pct") or 0.0)
+    run.cv_passes = bool(run.cv_selected.get("passes_internal_checks"))
+    return run
+
+
+def _latest_candidate_validation_runs():
+    qs = BacktestRun.objects.filter(
+        results__strategy_version=STRATEGY_VERSION,
+        results__candidate_validation_engine_version=CANDIDATE_VALIDATION_ENGINE_VERSION,
+        results__candidate_validation_mode=True,
+    ).order_by("-started_at")
+    seen = set()
+    out = []
+    for run in qs[:100]:
+        key = (run.symbol, run.timeframe)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(_decorate_candidate_validation(run))
+        if len(out) >= CANDIDATE_VALIDATION_TOTAL:
+            break
+    order = {key: idx for idx, key in enumerate(CANDIDATE_VALIDATION_SET)}
+    out.sort(key=lambda r: order.get((r.symbol, r.timeframe), 99))
+    return out
+
+
+def _latest_candidate_validation_detail(symbol, interval):
+    run = BacktestRun.objects.filter(
+        symbol=symbol,
+        timeframe=interval,
+        results__strategy_version=STRATEGY_VERSION,
+        results__candidate_validation_engine_version=CANDIDATE_VALIDATION_ENGINE_VERSION,
+        results__candidate_validation_mode=True,
+    ).order_by("-started_at").first()
+    return _decorate_candidate_validation(run) if run else None
+
+
 @login_required
 def dashboard(request):
     acct = mark_to_market(PaperAccount.primary())
@@ -393,10 +464,22 @@ def scanner_view(request):
 @login_required
 def paper_view(request):
     acct = mark_to_market(PaperAccount.primary())
+    candidate_acct = mark_candidate_to_market(candidate_account())
+
     if request.method == "POST":
-        paper_cycle()
-        messages.success(request, f"Strategy v{STRATEGY_VERSION} paper engine cycle completed.")
+        action = (request.POST.get("paper_action") or "control").strip()
+        if action == "candidate":
+            result = candidate_cycle()
+            messages.success(
+                request,
+                f"Candidate {CANDIDATE_PAPER_VERSION} cycle completed: "
+                f"{len(result['opened'])} opened, {len(result['closed'])} closed.",
+            )
+        else:
+            paper_cycle()
+            messages.success(request, f"Strategy v{STRATEGY_VERSION} control paper cycle completed.")
         return redirect("paper")
+
     return render(
         request,
         "paper.html",
@@ -405,6 +488,14 @@ def paper_view(request):
             "open_trades": _journal_rows(_paper_trades().filter(status="open")),
             "closed_trades": _journal_rows(_paper_trades().filter(status="closed")[:100]),
             "strategy_version": STRATEGY_VERSION,
+            "candidate_account": candidate_acct,
+            "candidate_open_trades": _journal_rows(candidate_trades().filter(status="open")),
+            "candidate_closed_trades": _journal_rows(candidate_trades().filter(status="closed")[:100]),
+            "candidate_version": CANDIDATE_PAPER_VERSION,
+            "candidate_threshold": CANDIDATE_PAPER_THRESHOLD,
+            "candidate_symbols": CANDIDATE_PAPER_SYMBOLS,
+            "candidate_symbols_label": ", ".join(CANDIDATE_PAPER_SYMBOLS),
+            "candidate_interval": CANDIDATE_PAPER_INTERVAL,
         },
     )
 
@@ -415,6 +506,8 @@ def backtest_view(request):
     selected_interval = (request.GET.get("interval") or "15m").strip()
     research_symbol = (request.GET.get("research_symbol") or "INJUSDT").upper().strip()
     research_interval = (request.GET.get("research_interval") or "1h").strip()
+    candidate_symbol = (request.GET.get("candidate_symbol") or "INJUSDT").upper().strip()
+    candidate_interval = (request.GET.get("candidate_interval") or "1h").strip()
     try:
         research_days = int(request.GET.get("research_days") or RESEARCH_DEFAULT_DAYS)
     except (TypeError, ValueError):
@@ -430,6 +523,8 @@ def backtest_view(request):
         research_interval = "1h"
     if research_days not in RESEARCH_LOOKBACK_VALUE_SET:
         research_days = RESEARCH_DEFAULT_DAYS
+    if not allowed_candidate(candidate_symbol, candidate_interval):
+        candidate_symbol, candidate_interval = CANDIDATE_VALIDATION_SET[0]
 
     if request.method == "POST":
         symbol = (request.POST.get("symbol") or "BTCUSDT").upper().strip()
@@ -437,17 +532,58 @@ def backtest_view(request):
         matrix_symbol = request.POST.get("matrix_symbol") == "1"
         research_one = request.POST.get("research_one") == "1"
         research_matrix_symbol = request.POST.get("research_matrix_symbol") == "1"
-        wants_json = (
-            matrix_symbol
-            or research_matrix_symbol
-            or request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        )
+        candidate_validation_one = request.POST.get("candidate_validation_one") == "1"
+        ajax_request = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        wants_json = matrix_symbol or research_matrix_symbol or ajax_request
 
         if symbol not in BACKTEST_SYMBOLS:
             if wants_json:
                 return JsonResponse({"ok": False, "error": "Pair is outside the Strategy v2 core universe."}, status=400)
             messages.error(request, "Choose a pair from the approved Strategy v2 core universe.")
             return redirect("backtest")
+
+        if candidate_validation_one:
+            candidate_interval_post = (request.POST.get("candidate_interval") or "1h").strip()
+            if not allowed_candidate(symbol, candidate_interval_post):
+                if ajax_request:
+                    return JsonResponse(
+                        {"ok": False, "error": "Choose one of the four frozen candidate pair/timeframe combinations."},
+                        status=400,
+                    )
+                messages.error(request, "Choose one of the four frozen candidate combinations.")
+                return redirect("backtest")
+            try:
+                run = run_candidate_validation(symbol, candidate_interval_post)
+                data = run.results or {}
+                selected = data.get("selected_threshold_result") or {}
+                oos = selected.get("oos") or {}
+                walk = selected.get("walk_forward") or {}
+                if ajax_request:
+                    return JsonResponse(
+                        {
+                            "ok": True,
+                            "symbol": symbol,
+                            "interval": candidate_interval_post,
+                            "threshold": data.get("selected_forward_threshold"),
+                            "oos_trades": oos.get("trades", 0),
+                            "oos_pf": oos.get("profit_factor", 0),
+                            "oos_expectancy_r": oos.get("expectancy_r", 0),
+                            "positive_windows": walk.get("positive_window_pct", 0),
+                            "passes": bool(selected.get("passes_internal_checks")),
+                        }
+                    )
+                messages.success(
+                    request,
+                    f"Candidate Validation v{CANDIDATE_VALIDATION_ENGINE_VERSION} completed "
+                    f"{symbol} {candidate_interval_post} across the threshold grid.",
+                )
+            except Exception as exc:
+                if ajax_request:
+                    return JsonResponse({"ok": False, "error": str(exc)}, status=500)
+                messages.error(request, f"Candidate validation failed: {exc}")
+            return redirect(
+                f"{reverse('backtest')}?candidate_symbol={symbol}&candidate_interval={candidate_interval_post}"
+            )
 
         if research_matrix_symbol:
             try:
@@ -581,6 +717,8 @@ def backtest_view(request):
     research_runs = _latest_research_runs(RESEARCH_DEFAULT_DAYS)
     research_summary = _research_summary(research_runs)
     research_detail = _latest_research_detail(research_symbol, research_interval, research_days)
+    candidate_validation_runs = _latest_candidate_validation_runs()
+    candidate_validation_detail = _latest_candidate_validation_detail(candidate_symbol, candidate_interval)
 
     return render(
         request,
@@ -608,6 +746,14 @@ def backtest_view(request):
             "research_selected_symbol": research_symbol,
             "research_selected_interval": research_interval,
             "research_selected_days": research_days,
+            "candidate_validation_version": CANDIDATE_VALIDATION_ENGINE_VERSION,
+            "candidate_forward_threshold": CANDIDATE_FORWARD_THRESHOLD,
+            "candidate_validation_choices": CANDIDATE_VALIDATION_CHOICES,
+            "candidate_validation_total": CANDIDATE_VALIDATION_TOTAL,
+            "candidate_validation_runs": candidate_validation_runs,
+            "candidate_validation_detail": candidate_validation_detail,
+            "candidate_selected_symbol": candidate_symbol,
+            "candidate_selected_interval": candidate_interval,
         },
     )
 
